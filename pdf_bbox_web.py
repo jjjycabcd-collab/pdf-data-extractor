@@ -32,7 +32,7 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 버튼 콜백 함수 (오류 없는 페이지 이동을 위함)
+# 2. 버튼 콜백 함수
 # ==========================================
 def go_prev():
     if st.session_state.current_page > 0:
@@ -42,16 +42,6 @@ def go_prev():
 def go_next(total_pages):
     if st.session_state.current_page < total_pages - 1:
         st.session_state.current_page += 1
-        st.session_state.selected_box_id = None
-
-def select_box(box_id):
-    st.session_state.selected_box_id = box_id
-
-def delete_box(idx, img_path, is_selected):
-    if os.path.exists(img_path):
-        os.remove(img_path)
-    st.session_state.annotations.pop(idx)
-    if is_selected:
         st.session_state.selected_box_id = None
 
 # ==========================================
@@ -128,20 +118,15 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col1, col2 = st.sidebar.columns(2)
-    # Streamlit 콜백 방식을 적용하여 버튼 오류 원천 차단
     col1.button("◀ 이전", on_click=go_prev)
     col2.button("다음 ▶", on_click=go_next, args=(total_pages,))
-    
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # ==========================================
-    # ★ 투명도 합성 완벽 해결 로직 ★
-    # ==========================================
+    # 투명도 합성 및 배경 준비
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     view_zoom = 1.0 
     
-    # 텍스트가 가려지지 않도록 빈 투명 레이어(Overlay)를 생성하여 그 위에 박스를 그립니다.
     overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
     
@@ -152,15 +137,14 @@ if uploaded_file is not None:
             
             if st.session_state.selected_box_id == anno['id']:
                 draw.rectangle([zx0, zy0, zx1, zy1], outline=(255, 0, 0, 255), width=3)
-                draw.rectangle([zx0, zy0, zx1, zy1], fill=(255, 0, 0, 50)) # 맑은 빨간색 투명
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(255, 0, 0, 50)) 
             else:
                 draw.rectangle([zx0, zy0, zx1, zy1], outline=(0, 0, 255, 255), width=2)
-                draw.rectangle([zx0, zy0, zx1, zy1], fill=(0, 0, 255, 30)) # 맑은 파란색 투명
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(0, 0, 255, 30)) 
 
-    # 원본 배경과 투명 박스 레이어를 완벽하게 병합
     bg_image = Image.alpha_composite(bg_image, overlay)
 
-    # 메인 레이아웃 분할
+    # 화면 분할
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
@@ -182,7 +166,6 @@ if uploaded_file is not None:
             objects = canvas_result.json_data["objects"]
             current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
             
-            # ★ 버그 수정: 무조건 새로 그려진 박스가 있으면 처리하도록 로직 단순화
             if len(current_canvas_objects) > 0:
                 new_rect = current_canvas_objects[-1]
                 page = doc.load_page(st.session_state.current_page)
@@ -209,38 +192,75 @@ if uploaded_file is not None:
                 }
                 st.session_state.annotations.append(new_anno)
                 
-                # 추출 직후 해당 박스 포커싱 및 캔버스 초기화
                 st.session_state.selected_box_id = anno_id
                 st.session_state.canvas_key_counter += 1
                 st.rerun() 
 
     with right_col:
-        st.write("**🔍 추출 목록 및 텍스트 편집기**")
+        st.write("**데이터 추출 목록**")
         
-        if not st.session_state.annotations:
-            st.info("왼쪽 뷰어에서 드래그하여 데이터를 추출해보세요.")
-        
-        for idx, anno in enumerate(st.session_state.annotations):
-            is_selected = (st.session_state.selected_box_id == anno['id'])
-            expander_title = f"🌟 Page {anno['page_idx'] + 1} - {anno['img_name']}" if is_selected else f"Page {anno['page_idx'] + 1} - {anno['img_name']}"
-            
-            with st.expander(expander_title, expanded=is_selected):
-                
-                # 콜백 함수를 이용한 연동 (버튼 씹힘 완벽 해결)
-                st.button("🎯 왼쪽 캔버스에서 이 영역 위치 확인", key=f"focus_{idx}", on_click=select_box, args=(anno['id'],))
-                
-                if os.path.exists(anno['img_path']):
-                    st.image(anno['img_path'], use_column_width=True)
-                
-                new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
-                if new_text != anno['text']:
-                    st.session_state.annotations[idx]['text'] = new_text
-                
-                # 삭제 버튼 콜백 연동
-                st.button("🗑️ 삭제", key=f"del_{idx}", on_click=delete_box, args=(idx, anno['img_path'], is_selected))
-
-        st.markdown("---")
         if st.session_state.annotations:
+            # 1. 추출 목록 리스트 영역 (라디오 버튼 활용)
+            anno_dict = {a['id']: a for a in st.session_state.annotations}
+            valid_ids = list(anno_dict.keys())
+            
+            # 선택된 아이템 무결성 검증
+            if st.session_state.selected_box_id not in valid_ids:
+                st.session_state.selected_box_id = valid_ids[-1] if valid_ids else None
+
+            # 리스트에 보여질 텍스트 포맷팅 함수
+            def format_list_item(anno_id):
+                anno = anno_dict[anno_id]
+                preview_text = anno['text'][:25].replace('\n', ' ') + ("..." if len(anno['text']) > 25 else "")
+                return f"[Page {anno['page_idx'] + 1}] {anno['img_name']} | {preview_text}"
+
+            # PC버전의 ListWidget 역할을 하는 라디오 버튼
+            selected_id = st.radio(
+                "항목 선택",
+                options=valid_ids,
+                format_func=format_list_item,
+                index=valid_ids.index(st.session_state.selected_box_id) if st.session_state.selected_box_id else 0,
+                label_visibility="collapsed"
+            )
+
+            # 리스트에서 항목 클릭 시 동작 로직 (양방향 연동 & 자동 페이지 이동)
+            if selected_id != st.session_state.selected_box_id:
+                st.session_state.selected_box_id = selected_id
+                target_page = anno_dict[selected_id]['page_idx']
+                # 다른 페이지의 아이템을 클릭하면 자동으로 해당 페이지로 뷰어 이동
+                if target_page != st.session_state.current_page:
+                    st.session_state.current_page = target_page
+                st.rerun()
+
+            selected_anno = anno_dict[st.session_state.selected_box_id]
+
+            # 삭제 버튼
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️ 선택 항목 삭제", use_container_width=True):
+                if os.path.exists(selected_anno['img_path']):
+                    os.remove(selected_anno['img_path'])
+                st.session_state.annotations = [a for a in st.session_state.annotations if a['id'] != st.session_state.selected_box_id]
+                st.session_state.selected_box_id = None
+                st.rerun()
+
+            st.markdown("---")
+            st.write("**🔍 선택 항목 상세 편집기**")
+
+            # 2. 크롭 이미지 영역
+            if os.path.exists(selected_anno['img_path']):
+                st.image(selected_anno['img_path'], use_column_width=True)
+            
+            # 3. 텍스트 수정 영역
+            new_text = st.text_area("텍스트 원문", value=selected_anno['text'], height=200)
+            if new_text != selected_anno['text']:
+                # 텍스트 수정 즉시 원본 데이터에 반영
+                for a in st.session_state.annotations:
+                    if a['id'] == st.session_state.selected_box_id:
+                        a['text'] = new_text
+                        break
+
+            st.markdown("---")
+            # 4. JSON 다운로드 버튼
             export_data = []
             for anno in st.session_state.annotations:
                 export_data.append({
@@ -249,7 +269,6 @@ if uploaded_file is not None:
                     "image_file": anno['img_name'],
                     "text": anno['text']
                 })
-            
             json_string = json.dumps(export_data, ensure_ascii=False, indent=4)
             st.download_button(
                 label="💾 JSON 결과 최종 추출 (다운로드)",
@@ -258,5 +277,7 @@ if uploaded_file is not None:
                 mime="application/json",
                 use_container_width=True
             )
+        else:
+            st.info("왼쪽 뷰어에서 마우스를 드래그하여 영역을 추출해주세요.")
 else:
     st.info("👈 사이드바에서 PDF 파일을 업로드하여 작업을 시작하세요.")
