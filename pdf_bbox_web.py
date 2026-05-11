@@ -102,8 +102,8 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev")
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next")
+    col_nav1.button("◀ 이전", on_click=go_prev)
+    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,))
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
@@ -185,10 +185,27 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 5건 노출 스크롤 컨테이너 + SyntaxError 해결 ---
-            with st.container(height=230):
+            # --- [수정] 구버전 호환용 스크롤바 구현 (CSS 방식) ---
+            st.markdown("""
+                <style>
+                .scroll-list {
+                    max-height: 230px;
+                    overflow-y: auto;
+                    border: 1px solid #ddd;
+                    padding: 10px;
+                    border-radius: 5px;
+                    background-color: #fafafa;
+                }
+                /* 라디오 버튼의 간격을 좁게 조절 */
+                div[data-testid="stRadio"] > div { gap: 0px; }
+                </style>
+                """, unsafe_allow_html=True)
+
+            with st.container():
+                # HTML div로 감싸서 CSS 클래스 적용
+                st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
+                
                 def format_label(aid):
-                    # f-string 내부에 백슬래시를 피하기 위해 중괄호 외부에서 replace 처리
                     txt = anno_dict[aid]['text'][:30].replace('\n', ' ')
                     return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
 
@@ -199,6 +216,7 @@ if uploaded_file is not None:
                     index=valid_ids.index(st.session_state.selected_box_id), 
                     label_visibility="collapsed"
                 )
+                st.markdown('</div>', unsafe_allow_html=True)
             
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
@@ -208,12 +226,11 @@ if uploaded_file is not None:
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
             
-            # 자료유형 없이 이미지와 텍스트 편집기 바로 노출
             st.image(curr_anno['img_path'], use_column_width=True)
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=350)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제", key="btn_delete"):
+            if c1.button("🗑️ 선택 항목 삭제"):
                 idx = st.session_state.annotations.index(curr_anno)
                 delete_box(idx, curr_anno['img_path'], True)
                 st.rerun()
