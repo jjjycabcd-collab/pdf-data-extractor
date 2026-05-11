@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 
 # ==========================================
-# 1. 페이지 및 상태 초기화 (타이틀 수정)
+# 1. 페이지 및 상태 초기화
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
@@ -31,23 +31,13 @@ if not os.path.exists(IMAGE_SAVE_DIR):
 # 2. 유틸리티 함수
 # ==========================================
 def clean_extracted_text(text):
+    """저자소개 등 불필요한 라인 제외"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
 
-def go_prev():
-    if st.session_state.current_page > 0:
-        st.session_state.current_page -= 1
-        st.session_state.selected_box_id = None
-        st.session_state.last_canvas_sig = None
-
-def go_next(total_pages):
-    if st.session_state.current_page < total_pages - 1:
-        st.session_state.current_page += 1
-        st.session_state.selected_box_id = None
-        st.session_state.last_canvas_sig = None
-
 def delete_single_item(anno_obj):
+    """현재 선택된 항목 하나만 삭제"""
     if anno_obj:
         if os.path.exists(anno_obj['img_path']):
             os.remove(anno_obj['img_path'])
@@ -102,8 +92,8 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev)
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,))
+    col_nav1.button("◀ 이전", on_click=lambda: (setattr(st.session_state, 'current_page', max(0, st.session_state.current_page - 1)), setattr(st.session_state, 'selected_box_id', None)))
+    col_nav2.button("다음 ▶", on_click=lambda: (setattr(st.session_state, 'current_page', min(total_pages - 1, st.session_state.current_page + 1)), setattr(st.session_state, 'selected_box_id', None)))
     st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
@@ -185,29 +175,32 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 추출 목록 독립 스크롤 영역 구현 ---
+            # --- [수정] 좌표 복원 및 독립 스크롤 영역 설정 ---
             st.markdown("""
                 <style>
-                .scrollable-list {
-                    max-height: 200px;
-                    overflow-y: auto;
+                .scroll-box {
+                    max-height: 220px;
+                    overflow-y: scroll !important;
                     border: 2px solid #4A90E2;
                     border-radius: 8px;
                     padding: 10px;
-                    background-color: #f9f9f9;
-                    margin-bottom: 15px;
+                    background-color: #ffffff;
                 }
-                div[data-testid="stRadio"] > div { gap: 2px; }
+                div[data-testid="stRadio"] > div { gap: 4px; }
                 </style>
                 """, unsafe_allow_html=True)
 
-            st.markdown('<div class="scrollable-list">', unsafe_allow_html=True)
-            def format_label(aid):
-                txt = anno_dict[aid]['text'][:35].replace('\n', ' ')
-                return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
+            st.markdown('<div class="scroll-box">', unsafe_allow_html=True)
+            
+            def format_label_with_coords(aid):
+                a = anno_dict[aid]
+                rect = a['pdf_rect']
+                coords = f"[X:{rect[0]:.0f}, Y:{rect[1]:.0f}, W:{rect[2]-rect[0]:.0f}, H:{rect[3]-rect[1]:.0f}]"
+                txt = a['text'][:25].replace('\n', ' ')
+                return f"[P{a['page_idx']+1}] {coords} | {txt}..."
 
             selected_id = st.radio(
-                "항목 선택", options=valid_ids, format_func=format_label,
+                "항목 선택", options=valid_ids, format_func=format_label_with_coords,
                 index=valid_ids.index(st.session_state.selected_box_id), 
                 label_visibility="collapsed"
             )
@@ -228,16 +221,15 @@ if uploaded_file is not None:
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180)
 
             c1, c2 = st.columns(2)
-            # [오류 수정] use_column_width 제거 (st.button에 없는 인자)
             if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected"):
                 delete_single_item(curr_anno)
                 st.rerun()
             
-            export_data = [{"page": a['page_idx']+1, "text": a['text'], "bbox": a['pdf_rect'], "image": a['img_name']} for a in st.session_state.annotations]
+            export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text'], "image": a['img_name']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                file_name="extracted.json", mime="application/json")
         else:
-            st.info("왼쪽에서 영역을 드래그하여 작업을 시작하세요.")
+            st.info("왼쪽에서 추출 작업을 진행해 주세요.")
 
 # ==========================================
 # 4. JavaScript 단축키
