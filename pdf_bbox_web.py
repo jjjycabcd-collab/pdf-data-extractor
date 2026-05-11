@@ -47,12 +47,16 @@ def go_next(total_pages):
         st.session_state.selected_box_id = None
         st.session_state.last_canvas_sig = None
 
-def delete_box(idx, img_path, is_selected):
-    if os.path.exists(img_path):
-        os.remove(img_path)
-    if idx < len(st.session_state.annotations):
-        st.session_state.annotations.pop(idx)
-    if is_selected:
+def delete_single_item(anno_obj):
+    """현재 선택된 단 하나의 항목만 삭제"""
+    if anno_obj:
+        # 이미지 파일 삭제
+        if os.path.exists(anno_obj['img_path']):
+            os.remove(anno_obj['img_path'])
+        # 리스트에서 제거
+        if anno_obj in st.session_state.annotations:
+            st.session_state.annotations.remove(anno_obj)
+        # 선택 상태 초기화
         st.session_state.selected_box_id = None
 
 @st.cache_data(show_spinner=False)
@@ -106,6 +110,7 @@ if uploaded_file is not None:
     col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,))
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
+    # PDF 배경 로드
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     
@@ -185,38 +190,32 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 구버전 호환용 스크롤바 구현 (CSS 방식) ---
+            # --- [수정] 5건 기준 스크롤바 영역 설정 ---
             st.markdown("""
                 <style>
-                .scroll-list {
-                    max-height: 230px;
+                .scroll-container {
+                    max-height: 230px; 
                     overflow-y: auto;
-                    border: 1px solid #ddd;
-                    padding: 10px;
-                    border-radius: 5px;
-                    background-color: #fafafa;
+                    border: 1px solid #e6e9ef;
+                    border-radius: 8px;
+                    padding: 5px;
+                    background-color: #f8f9fb;
                 }
-                /* 라디오 버튼의 간격을 좁게 조절 */
-                div[data-testid="stRadio"] > div { gap: 0px; }
+                div[data-testid="stRadio"] > div { gap: 2px; }
                 </style>
                 """, unsafe_allow_html=True)
 
-            with st.container():
-                # HTML div로 감싸서 CSS 클래스 적용
-                st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
-                
-                def format_label(aid):
-                    txt = anno_dict[aid]['text'][:30].replace('\n', ' ')
-                    return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
+            st.markdown('<div class="scroll-container">', unsafe_allow_html=True)
+            def format_label(aid):
+                txt = anno_dict[aid]['text'][:30].replace('\n', ' ')
+                return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
 
-                selected_id = st.radio(
-                    "항목 선택", 
-                    options=valid_ids, 
-                    format_func=format_label,
-                    index=valid_ids.index(st.session_state.selected_box_id), 
-                    label_visibility="collapsed"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
+            selected_id = st.radio(
+                "항목 선택", options=valid_ids, format_func=format_label,
+                index=valid_ids.index(st.session_state.selected_box_id), 
+                label_visibility="collapsed"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
             
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
@@ -226,23 +225,24 @@ if uploaded_file is not None:
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
             
+            # 자료유형 제거, 이미지와 텍스트 편집기 노출
             st.image(curr_anno['img_path'], use_column_width=True)
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=350)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제"):
-                idx = st.session_state.annotations.index(curr_anno)
-                delete_box(idx, curr_anno['img_path'], True)
+            # [수정] 현재 보고 있는 'curr_anno' 하나만 삭제
+            if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected"):
+                delete_single_item(curr_anno)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "text": a['text'], "bbox": a['pdf_rect'], "image": a['img_name']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                file_name="extracted.json", mime="application/json")
         else:
-            st.info("왼쪽 뷰어에서 영역을 드래그하세요.")
+            st.info("왼쪽에서 추출 작업을 진행해 주세요.")
 
 # ==========================================
-# 4. JavaScript 단축키
+# 4. JavaScript 단축키 (이전/다음/삭제)
 # ==========================================
 components.html(
     """
@@ -256,6 +256,7 @@ components.html(
             const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음'));
             if (btn) btn.click();
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            // 입력창 안에서는 단축키 비활성화
             if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
                 const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
                 if (btn) btn.click();
