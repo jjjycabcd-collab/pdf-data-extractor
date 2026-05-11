@@ -2,6 +2,7 @@ import streamlit as st
 import fitz  # PyMuPDF
 import json
 import os
+import io
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -10,6 +11,8 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="SI 데이터 구축 엔진 - Web")
 
+if 'file_bytes' not in st.session_state:
+    st.session_state.file_bytes = None
 if 'pdf_doc' not in st.session_state:
     st.session_state.pdf_doc = None
 if 'current_page' not in st.session_state:
@@ -19,14 +22,24 @@ if 'annotations' not in st.session_state:
 if 'crop_counter' not in st.session_state:
     st.session_state.crop_counter = 0
 
-# 이미지 임시 저장 경로
 IMAGE_SAVE_DIR = "extracted_images"
 if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 핵심 로직 함수
+# 2. 핵심 로직 & ★ 완벽 캐싱 함수 ★
 # ==========================================
+
+# [초강력 패치] Streamlit 공식 캐시를 사용하여 배경 이미지를 절대 증발하지 않는 Byte로 박제합니다.
+@st.cache_data(show_spinner=False)
+def get_cached_bg_bytes(file_bytes, page_idx):
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page = doc.load_page(page_idx)
+    # 네트워크 과부하 방지를 위해 1.0 고정
+    mat = fitz.Matrix(1.0, 1.0)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    return pix.tobytes("png")
+
 def get_autofit_rect(page, pdf_rect, autofit_enabled):
     if not autofit_enabled: 
         return pdf_rect
@@ -61,7 +74,6 @@ def save_cropped_image(page, pdf_rect):
     page_num = st.session_state.current_page + 1
     filename = f"crop_p{page_num}_{st.session_state.crop_counter:03d}.png"
     filepath = os.path.join(IMAGE_SAVE_DIR, filename)
-    # 데이터 추출용은 초고화질(3.0) 유지
     pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
     pix.save(filepath)
     return filename, filepath
@@ -71,15 +83,17 @@ def save_cropped_image(page, pdf_rect):
 # ==========================================
 st.title("📄 SI 데이터 구축 엔진 - Web Editor")
 
-# 파일 업로드
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
 if uploaded_file is not None:
-    if st.session_state.pdf_doc is None or st.session_state.get('file_name') != uploaded_file.name:
-        pdf_bytes = uploaded_file.read()
-        st.session_state.pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    # 새 파일 업로드 시 초기화
+    if st.session_state.get('file_name') != uploaded_file.name:
+        file_bytes = uploaded_file.read()
+        st.session_state.file_bytes = file_bytes
+        st.session_state.pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         st.session_state.current_page = 0
         st.session_state.annotations = []
+        st.session_state.crop_counter = 0
         st.session_state.file_name = uploaded_file.name
 
     doc = st.session_state.pdf_doc
@@ -99,25 +113,14 @@ if uploaded_file is not None:
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
-    # ★ 하얀 캔버스 완벽 해결의 핵심 로직 ★
+    # ★ 하얀 캔버스 완벽 차단 로직 적용 ★
     # ==========================================
-    page = doc.load_page(st.session_state.current_page)
+    # 1. 절대 증발하지 않는 캐시에서 안전하게 바이트 데이터를 가져옵니다.
+    bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     
-    # 뷰어 해상도 세팅
+    # 2. 캔버스에 그리기 직전에만 메모리에서 이미지를 엽니다. (Lazy Loading 버그 원천 차단)
+    bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
     view_zoom = 1.0 
-    mat = fitz.Matrix(view_zoom, view_zoom)
-    
-    # 1. 배경 이미지를 물리적 파일로 확실히 저장
-    bg_img_filename = f"bg_{st.session_state.file_name}_p{st.session_state.current_page}.png"
-    bg_img_path = os.path.join(IMAGE_SAVE_DIR, bg_img_filename)
-    
-    if not os.path.exists(bg_img_path):
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        pix.save(bg_img_path)
-        
-    # 2. PIL로 열고 .load()를 통해 메모리에 강제 할당 (Lazy Loading 버그 원천 차단)
-    bg_image = Image.open(bg_img_path)
-    bg_image.load() 
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -134,7 +137,7 @@ if uploaded_file is not None:
             height=bg_image.height,
             width=bg_image.width,
             drawing_mode="rect",
-            key=f"canvas_{st.session_state.current_page}_{uploaded_file.name}",
+            key=f"canvas_{st.session_state.current_page}_{st.session_state.file_name}",
         )
 
         if canvas_result.json_data is not None:
@@ -144,8 +147,8 @@ if uploaded_file is not None:
             
             if len(current_canvas_objects) > len(page_annotations):
                 new_rect = current_canvas_objects[-1]
+                page = doc.load_page(st.session_state.current_page)
                 
-                # 좌표 매핑
                 x0 = new_rect["left"] / view_zoom
                 y0 = new_rect["top"] / view_zoom
                 x1 = (new_rect["left"] + new_rect["width"]) / view_zoom
@@ -177,9 +180,7 @@ if uploaded_file is not None:
         for idx, anno in enumerate(st.session_state.annotations):
             with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
                 if os.path.exists(anno['img_path']):
-                    crop_img = Image.open(anno['img_path'])
-                    crop_img.load() # 안전을 위해 추출된 이미지도 메모리 강제 할당
-                    st.image(crop_img, use_column_width=True)
+                    st.image(anno['img_path'], use_column_width=True)
                 
                 new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
                 if new_text != anno['text']:
