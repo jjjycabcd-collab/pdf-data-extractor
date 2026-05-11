@@ -12,7 +12,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작업 데이터 구축 - Web Editor")
 
-# 세션 상태 초기값 설정
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
@@ -29,24 +28,14 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 데이터 분류 및 정제 로직
+# 2. 유틸리티 함수
 # ==========================================
-def classify_material(text):
-    text_clean = text.replace(" ", "").lower()
-    if any(kw in text_clean for kw in ["표준", "지침", "도서"]):
-        return "단행본"
-    if any(kw in text_clean for kw in ["보도자료", "신문", "연보"]):
-        return "기타"
-    return "단행본"
-
 def clean_extracted_text(text):
+    """저자소개 제외 및 텍스트 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
 
-# ==========================================
-# 3. 버튼 콜백 함수
-# ==========================================
 def go_prev():
     if st.session_state.current_page > 0:
         st.session_state.current_page -= 1
@@ -67,9 +56,6 @@ def delete_box(idx, img_path, is_selected):
     if is_selected:
         st.session_state.selected_box_id = None
 
-# ==========================================
-# 4. PDF 처리 로직
-# ==========================================
 @st.cache_data(show_spinner=False)
 def get_cached_bg_bytes(file_bytes, page_idx):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -87,10 +73,6 @@ def get_autofit_rect(page, pdf_rect, autofit_enabled):
             fitted_rect = w_rect if fitted_rect is None else fitted_rect | w_rect 
     return fitted_rect if fitted_rect else pdf_rect
 
-def get_sorted_text(page, rect):
-    raw_text = page.get_text("text", clip=rect)
-    return clean_extracted_text(raw_text)
-
 def save_cropped_image(page, pdf_rect):
     st.session_state.crop_counter += 1
     filename = f"crop_p{st.session_state.current_page+1}_{st.session_state.crop_counter:03d}.png"
@@ -100,7 +82,7 @@ def save_cropped_image(page, pdf_rect):
     return filename, filepath
 
 # ==========================================
-# 5. UI 및 메인 앱 로직
+# 3. 메인 UI 레이아웃
 # ==========================================
 st.title("📄 상호작업 데이터 구축 - Web Editor")
 
@@ -121,14 +103,15 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    # 구버전 호환을 위해 use_container_width 대신 use_column_width (또는 생략) 사용
-    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev")
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next")
+    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev", use_column_width=True)
+    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next", use_column_width=True)
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
+    # 배경 이미지 준비
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     
+    # 하이라이트 드로잉
     overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
     img_scale = 1.5 
@@ -140,15 +123,16 @@ if uploaded_file is not None:
             draw.rectangle([x0, y0, x1, y1], outline=(255,0,0,255) if is_sel else (0,0,255,255), width=3 if is_sel else 2)
             draw.rectangle([x0, y0, x1, y1], fill=(255,0,0,40) if is_sel else (0,0,255,20))
 
-    bg_image = Image.alpha_composite(bg_image, overlay)
+    bg_composite = Image.alpha_composite(bg_image, overlay)
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
+        st.write("**[PDF 뷰어] 드래그하여 영역을 추출하세요**")
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
             stroke_color="rgba(0, 0, 255, 0.8)",
-            background_image=bg_image,
+            background_image=bg_composite,
             initial_drawing=st.session_state.canvas_state,
             update_streamlit=True,
             height=bg_image.height,
@@ -157,6 +141,7 @@ if uploaded_file is not None:
             key=f"canvas_p{st.session_state.current_page}",
         )
 
+        # 캔버스 로직 (추출 및 선택)
         if canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             if objs:
@@ -167,7 +152,7 @@ if uploaded_file is not None:
                     p_x0, p_y0 = new_rect["left"] / img_scale, new_rect["top"] / img_scale
                     p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / img_scale, (new_rect["top"] + new_rect["height"]) / img_scale
                     
-                    if new_rect["width"] < 15: 
+                    if new_rect["width"] < 15: # 클릭 선택
                         clicked_id = None
                         for a in reversed(st.session_state.annotations):
                             if a['page_idx'] == st.session_state.current_page:
@@ -176,18 +161,18 @@ if uploaded_file is not None:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
-                    else: 
+                    else: # 영역 추출
                         page = doc.load_page(st.session_state.current_page)
                         fit_rect = get_autofit_rect(page, fitz.Rect(p_x0, p_y0, p_x1, p_y1), autofit_enabled)
-                        text = get_sorted_text(page, fit_rect)
+                        raw_text = page.get_text("text", clip=fit_rect)
+                        text = clean_extracted_text(raw_text)
                         img_name, img_path = save_cropped_image(page, fit_rect)
                         
                         anno_id = f"id_{st.session_state.crop_counter}"
                         st.session_state.annotations.append({
                             'id': anno_id, 'page_idx': st.session_state.current_page,
                             'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
-                            'text': text, 'img_name': img_name, 'img_path': img_path,
-                            'type': classify_material(text)
+                            'text': text, 'img_name': img_name, 'img_path': img_path
                         })
                         st.session_state.selected_box_id = anno_id
                     
@@ -196,7 +181,7 @@ if uploaded_file is not None:
                     st.rerun()
 
     with right_col:
-        st.write("**데이터 추출 목록**")
+        st.subheader("데이터 추출 목록")
         if st.session_state.annotations:
             anno_dict = {a['id']: a for a in st.session_state.annotations}
             valid_ids = list(anno_dict.keys())
@@ -204,36 +189,47 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            selected_id = st.radio("항목 선택", options=valid_ids, 
-                                   format_func=lambda aid: f"[P{anno_dict[aid]['page_idx']+1}] {anno_dict[aid]['text'][:20]}...", 
-                                   index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
+            # --- [수정] 5건 정도 노출 후 스크롤바가 생기도록 컨테이너 설정 ---
+            with st.container():
+                # CSS 주입으로 스크롤바 영역 강제 지정 (st.container의 height 기능 활용)
+                st.markdown('<style>div[data-testid="stVerticalBlock"] > div:has(div[data-testid="stRadio"]) { overflow-y: auto; }</style>', unsafe_allow_html=True)
+                
+                # 목록 영역 (높이 제한을 두어 스크롤 유도)
+                with st.container(height=200): 
+                    selected_id = st.radio(
+                        "항목 선택", 
+                        options=valid_ids, 
+                        format_func=lambda aid: f"[P{anno_dict[aid]['page_idx']+1}] {anno_dict[aid]['text'][:30].replace('\\n',' ')}...", 
+                        index=valid_ids.index(st.session_state.selected_box_id), 
+                        label_visibility="collapsed"
+                    )
             
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
                 st.session_state.current_page = anno_dict[selected_id]['page_idx']
                 st.rerun()
 
+            st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            # ★ 에러 해결: use_container_width 대신 use_column_width 사용
-            st.image(curr_anno['img_path'], use_column_width=True)
             
-            types = ["단행본", "기타"]
-            curr_anno['type'] = st.selectbox("자료유형", types, index=types.index(curr_anno['type']) if curr_anno['type'] in types else 0)
-            curr_anno['text'] = st.text_area("텍스트 편집", value=curr_anno['text'], height=200)
+            # 자료유형 제거 후 추출 이미지와 텍스트 편집기 배치
+            st.image(curr_anno['img_path'], use_column_width=True, caption="추출 이미지")
+            curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=300)
 
-            if st.button("🗑️ 선택 항목 삭제", key="btn_delete"):
+            c1, c2 = st.columns(2)
+            if c1.button("🗑️ 선택 항목 삭제", key="btn_delete", use_column_width=True):
                 idx = st.session_state.annotations.index(curr_anno)
                 delete_box(idx, curr_anno['img_path'], True)
                 st.rerun()
             
-            export_data = [{"page": a['page_idx']+1, "type": a.get('type','단행본'), "text": a['text'], "bbox": a['pdf_rect']} for a in st.session_state.annotations]
-            st.download_button("💾 JSON 결과 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted.json", mime="application/json")
+            export_data = [{"page": a['page_idx']+1, "text": a['text'], "bbox": a['pdf_rect'], "image": a['img_name']} for a in st.session_state.annotations]
+            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
+                               file_name="extracted_data.json", mime="application/json", use_column_width=True)
         else:
-            st.info("영역을 드래그하여 데이터를 추출하세요.")
+            st.info("왼쪽 뷰어에서 영역을 드래그하면 이곳에 편집창이 나타납니다.")
 
 # ==========================================
-# 6. JavaScript 단축키 주입
+# 4. JavaScript 단축키
 # ==========================================
 components.html(
     """
