@@ -29,21 +29,17 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 데이터 분류 및 정제 로직 (개인화 설정 반영)
+# 2. 데이터 분류 및 정제 로직
 # ==========================================
 def classify_material(text):
-    """텍스트 내용을 분석하여 자료유형 자동 분류"""
     text_clean = text.replace(" ", "").lower()
-    # 단행본 분류: 표준, 지침, 도서
     if any(kw in text_clean for kw in ["표준", "지침", "도서"]):
         return "단행본"
-    # 기타 분류: 보도자료, 신문, 연보
     if any(kw in text_clean for kw in ["보도자료", "신문", "연보"]):
         return "기타"
     return "단행본"
 
 def clean_extracted_text(text):
-    """저자소개 제외 및 텍스트 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
@@ -125,17 +121,17 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev, use_container_width=True, key="btn_prev")
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), use_container_width=True, key="btn_next")
+    # 구버전 호환을 위해 use_container_width 대신 use_column_width (또는 생략) 사용
+    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev")
+    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next")
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # PDF 배경 합성
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     
     overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    img_scale = 1.5 # get_pixmap의 matrix 값과 동일하게 설정
+    img_scale = 1.5 
 
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -168,11 +164,10 @@ if uploaded_file is not None:
                 rect_sig = f"{new_rect['left']}_{new_rect['top']}_{new_rect['width']}"
                 if st.session_state.last_canvas_sig != rect_sig:
                     st.session_state.last_canvas_sig = rect_sig
-                    
                     p_x0, p_y0 = new_rect["left"] / img_scale, new_rect["top"] / img_scale
                     p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / img_scale, (new_rect["top"] + new_rect["height"]) / img_scale
                     
-                    if new_rect["width"] < 15: # 클릭 인식
+                    if new_rect["width"] < 15: 
                         clicked_id = None
                         for a in reversed(st.session_state.annotations):
                             if a['page_idx'] == st.session_state.current_page:
@@ -181,7 +176,7 @@ if uploaded_file is not None:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
-                    else: # 드래그 추출
+                    else: 
                         page = doc.load_page(st.session_state.current_page)
                         fit_rect = get_autofit_rect(page, fitz.Rect(p_x0, p_y0, p_x1, p_y1), autofit_enabled)
                         text = get_sorted_text(page, fit_rect)
@@ -209,11 +204,8 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            def format_func(aid):
-                a = anno_dict[aid]
-                return f"[P{a['page_idx']+1}] {a['text'][:20]}..."
-
-            selected_id = st.radio("항목 선택", options=valid_ids, format_func=format_func, 
+            selected_id = st.radio("항목 선택", options=valid_ids, 
+                                   format_func=lambda aid: f"[P{anno_dict[aid]['page_idx']+1}] {anno_dict[aid]['text'][:20]}...", 
                                    index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
             
             if selected_id != st.session_state.selected_box_id:
@@ -222,22 +214,21 @@ if uploaded_file is not None:
                 st.rerun()
 
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            st.image(curr_anno['img_path'], use_container_width=True)
+            # ★ 에러 해결: use_container_width 대신 use_column_width 사용
+            st.image(curr_anno['img_path'], use_column_width=True)
             
-            # 자료유형 수정
             types = ["단행본", "기타"]
             curr_anno['type'] = st.selectbox("자료유형", types, index=types.index(curr_anno['type']) if curr_anno['type'] in types else 0)
             curr_anno['text'] = st.text_area("텍스트 편집", value=curr_anno['text'], height=200)
 
-            if st.button("🗑️ 선택 항목 삭제", use_container_width=True, key="btn_delete"):
+            if st.button("🗑️ 선택 항목 삭제", key="btn_delete"):
                 idx = st.session_state.annotations.index(curr_anno)
                 delete_box(idx, curr_anno['img_path'], True)
                 st.rerun()
             
-            # 다운로드 버튼
             export_data = [{"page": a['page_idx']+1, "type": a.get('type','단행본'), "text": a['text'], "bbox": a['pdf_rect']} for a in st.session_state.annotations]
             st.download_button("💾 JSON 결과 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted.json", mime="application/json", use_container_width=True)
+                               file_name="extracted.json", mime="application/json")
         else:
             st.info("영역을 드래그하여 데이터를 추출하세요.")
 
@@ -256,7 +247,6 @@ components.html(
             const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음'));
             if (btn) btn.click();
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
-            // 텍스트 영역 입력 중에는 삭제 작동 방지
             if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
                 const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
                 if (btn) btn.click();
