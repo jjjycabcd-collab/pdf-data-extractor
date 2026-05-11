@@ -2,7 +2,6 @@ import streamlit as st
 import fitz  # PyMuPDF
 import json
 import os
-import io
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -11,8 +10,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="SI 데이터 구축 엔진 - Web")
 
-if 'file_bytes' not in st.session_state:
-    st.session_state.file_bytes = None
 if 'pdf_doc' not in st.session_state:
     st.session_state.pdf_doc = None
 if 'current_page' not in st.session_state:
@@ -27,19 +24,8 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 핵심 로직 & ★ 완벽 캐싱 함수 ★
+# 2. 핵심 로직 함수
 # ==========================================
-
-# [초강력 패치] Streamlit 공식 캐시를 사용하여 배경 이미지를 절대 증발하지 않는 Byte로 박제합니다.
-@st.cache_data(show_spinner=False)
-def get_cached_bg_bytes(file_bytes, page_idx):
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    page = doc.load_page(page_idx)
-    # 네트워크 과부하 방지를 위해 1.0 고정
-    mat = fitz.Matrix(1.0, 1.0)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    return pix.tobytes("png")
-
 def get_autofit_rect(page, pdf_rect, autofit_enabled):
     if not autofit_enabled: 
         return pdf_rect
@@ -86,10 +72,8 @@ st.title("📄 SI 데이터 구축 엔진 - Web Editor")
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
 if uploaded_file is not None:
-    # 새 파일 업로드 시 초기화
-    if st.session_state.get('file_name') != uploaded_file.name:
+    if st.session_state.pdf_doc is None or st.session_state.get('file_name') != uploaded_file.name:
         file_bytes = uploaded_file.read()
-        st.session_state.file_bytes = file_bytes
         st.session_state.pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         st.session_state.current_page = 0
         st.session_state.annotations = []
@@ -113,14 +97,15 @@ if uploaded_file is not None:
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
-    # ★ 하얀 캔버스 완벽 차단 로직 적용 ★
+    # ★ 하얀 캔버스 원천 차단: RGBA 변환 및 정수 규격화 ★
     # ==========================================
-    # 1. 절대 증발하지 않는 캐시에서 안전하게 바이트 데이터를 가져옵니다.
-    bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
-    
-    # 2. 캔버스에 그리기 직전에만 메모리에서 이미지를 엽니다. (Lazy Loading 버그 원천 차단)
-    bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
+    page = doc.load_page(st.session_state.current_page)
     view_zoom = 1.0 
+    mat = fitz.Matrix(view_zoom, view_zoom)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    
+    # 캔버스가 절대 거부하지 못하도록 완벽한 RGBA 포맷으로 강제 변환
+    bg_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -134,10 +119,12 @@ if uploaded_file is not None:
             stroke_color="rgba(0, 0, 255, 0.8)",
             background_image=bg_image,
             update_streamlit=True,
-            height=bg_image.height,
-            width=bg_image.width,
+            # 에러 방지를 위해 사이즈를 명확한 정수(int)로 강제 고정
+            height=int(bg_image.height),
+            width=int(bg_image.width),
             drawing_mode="rect",
-            key=f"canvas_{st.session_state.current_page}_{st.session_state.file_name}",
+            # 버그 유발 특수문자 제거된 안전한 키값
+            key=f"canvas_page_{st.session_state.current_page}",
         )
 
         if canvas_result.json_data is not None:
@@ -147,7 +134,6 @@ if uploaded_file is not None:
             
             if len(current_canvas_objects) > len(page_annotations):
                 new_rect = current_canvas_objects[-1]
-                page = doc.load_page(st.session_state.current_page)
                 
                 x0 = new_rect["left"] / view_zoom
                 y0 = new_rect["top"] / view_zoom
