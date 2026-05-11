@@ -144,6 +144,7 @@ if st.session_state.file_bytes:
             height=canvas_h,
             width=canvas_w,
             drawing_mode="rect",
+            display_toolbar=False,  # <--- 이 라인을 추가하여 도구 모음을 숨깁니다.
             key=f"canvas_p{st.session_state.current_page}",
         )
 
