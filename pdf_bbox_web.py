@@ -118,7 +118,7 @@ if st.session_state.file_bytes:
                 "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
                 "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
                 "strokeWidth": 3 if is_sel else 2,
-                "id": anno['id']  # 커스텀 ID 저장
+                "id": anno['id']
             })
     
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
@@ -127,14 +127,16 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        # 모드 안내 및 선택 해제 버튼
-        status_txt = "🔧 영역 수정 모드 (박스 핸들을 드래그하세요)" if tag_mode=="transform" else "🖋️ 새 영역 태깅 모드 (드래그하여 박스를 그리세요)"
-        st.write(f"**{status_txt}**")
-        
-        if tag_mode == "transform":
-            if st.button("➕ 새 영역 추가하러 가기 (선택 해제)"):
-                st.session_state.selected_box_id = None
-                st.rerun()
+        # 모드 안내 및 선택 해제 버튼 (상단에 작고 깔끔하게 배치)
+        header_col1, header_col2 = st.columns([7, 3])
+        with header_col1:
+            status_txt = "🔧 영역 수정 모드 (박스 핸들을 드래그하세요)" if tag_mode=="transform" else "🖋️ 새 영역 태깅 모드 (드래그하여 박스를 그리세요)"
+            st.write(f"**{status_txt}**")
+        with header_col2:
+            if tag_mode == "transform":
+                if st.button("🔄 새 영역 그리기"):
+                    st.session_state.selected_box_id = None
+                    st.rerun()
 
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -160,14 +162,14 @@ if st.session_state.file_bytes:
                     if "id" in obj:
                         for anno in st.session_state.annotations:
                             if anno['id'] == obj['id']:
-                                # 캔버스 좌표 -> 원본 PDF 좌표로 역변환하여 저장
+                                # scaleX, scaleY 속성을 반영하여 정확한 크기 계산
                                 new_x0 = obj['left'] / pdf_to_canvas_ratio
                                 new_y0 = obj['top'] / pdf_to_canvas_ratio
-                                new_x1 = new_x0 + (obj['width'] * obj['scaleX']) / pdf_to_canvas_ratio
-                                new_y1 = new_y0 + (obj['height'] * obj['scaleY']) / pdf_to_canvas_ratio
+                                new_x1 = new_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                                new_y1 = new_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                 anno['pdf_rect'] = [new_x0, new_y0, new_x1, new_y1]
             else:
-                # [그리기 모드] 새 박스 생성
+                # [그리기 모드] 새 박스 생성 또는 기존 박스 클릭 선택
                 if objs:
                     last_obj = objs[-1]
                     rect_sig = f"{last_obj['left']}_{last_obj['width']}_{len(objs)}"
@@ -179,7 +181,17 @@ if st.session_state.file_bytes:
                         p_x1 = p_x0 + (last_obj["width"] / pdf_to_canvas_ratio)
                         p_y1 = p_y0 + (last_obj["height"] / pdf_to_canvas_ratio)
                         
-                        if last_obj["width"] > 5: # 드래그 시 추출
+                        if last_obj["width"] < 10: # 클릭을 감지 (너비가 아주 작을 때)
+                            clicked_id = None
+                            for a in reversed(st.session_state.annotations):
+                                if a['page_idx'] == st.session_state.current_page:
+                                    rx0, ry0, rx1, ry1 = a['pdf_rect']
+                                    if rx0 <= p_x0 <= rx1 and ry0 <= p_y0 <= ry1:
+                                        clicked_id = a['id']
+                                        break
+                            st.session_state.selected_box_id = clicked_id
+                            st.rerun()
+                        else: # 실제 드래그 시 데이터 추출
                             page = doc.load_page(st.session_state.current_page)
                             fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
                             
@@ -209,21 +221,21 @@ if st.session_state.file_bytes:
     with right_col:
         st.subheader("데이터 추출 목록")
         if st.session_state.annotations:
-            # 목록 정렬 (페이지 순)
             anno_dict = {a['id']: a for a in st.session_state.annotations}
             valid_ids = list(anno_dict.keys())
             
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1] if valid_ids else None
 
-            # 스크롤 목록
+            # 스크롤 목록 (5건 높이 유지)
             st.markdown("""<style>.scroll-v { max-height: 200px; overflow-y: auto; border: 2px solid #4A90E2; border-radius: 8px; padding: 5px; background: #f9f9f9; }</style>""", unsafe_allow_html=True)
             st.markdown('<div class="scroll-v">', unsafe_allow_html=True)
             
             def format_label(aid):
                 a = anno_dict[aid]
                 r = a['pdf_rect']
-                return f"[P{a['page_idx']+1}] [X:{int(r[0])}, Y:{int(r[1])}] | {a['text'][:25]}..."
+                coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
+                return "[P" + str(a['page_idx']+1) + "] " + coords + " | " + a['text'][:20].replace('\n', ' ') + "..."
 
             selected_id = st.radio("선택", options=valid_ids, format_func=format_label,
                                    index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
@@ -236,17 +248,18 @@ if st.session_state.file_bytes:
 
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            st.image(curr_anno['img_path'], use_column_width=True)
+            st.image(curr_anno['img_path'], use_column_width=True) # 에러 방지를 위해 use_column_width 고정
             curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 삭제", use_container_width=True, type="primary"):
+            # 버튼류에서 use_container_width를 제거하여 모든 Streamlit 버전에서 에러 없이 동작하도록 수정
+            if c1.button("🗑️ 삭제", type="primary"):
                 delete_single_item(curr_anno)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="result.json", mime="application/json", use_container_width=True)
+                               file_name="result.json", mime="application/json")
         else:
             st.info("영역을 드래그하여 태깅을 시작하세요.")
 
