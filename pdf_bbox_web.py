@@ -28,10 +28,10 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 데이터 정제 유틸리티 (Saved Info 반영)
+# 2. 유틸리티 함수
 # ==========================================
 def clean_extracted_text(text):
-    """저자소개 제외 및 참고문헌 위주 정제"""
+    """저자소개 제외 및 텍스트 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
@@ -48,26 +48,44 @@ def delete_single_item(anno_obj):
 def get_cached_bg_image(file_bytes, page_idx):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page = doc.load_page(page_idx)
-    # 고해상도 렌더링 (2.0배)
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     return img, page.rect.width, page.rect.height
 
 # ==========================================
-# 3. 메인 UI 레이아웃
+# 3. 메인 UI 및 파일 로직
 # ==========================================
 st.title("📄 상호작용 데이터 구축 - Web Editor")
 
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
+# --- [수정] 파일 로드 및 초기화 로직 ---
+target_file_bytes = None
+current_file_name = ""
+
 if uploaded_file is not None:
+    # 새로운 파일이 업로드된 경우 초기화
     if st.session_state.file_name != uploaded_file.name:
         st.session_state.file_bytes = uploaded_file.read()
         st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
         st.session_state.file_name = uploaded_file.name
+        st.session_state.current_page = 0
         st.session_state.annotations = []
+        st.session_state.crop_counter = 0
+        st.session_state.selected_box_id = None
         st.rerun()
+else:
+    # 업로드된 파일이 없고, 기존에 로드된 파일도 없을 때 sample.pdf 시도
+    if not st.session_state.file_bytes:
+        sample_path = "sample.pdf"
+        if os.path.exists(sample_path):
+            with open(sample_path, "rb") as f:
+                st.session_state.file_bytes = f.read()
+            st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
+            st.session_state.file_name = "sample.pdf"
 
+# 파일이 로드된 상태에서만 UI 실행
+if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
 
@@ -86,24 +104,19 @@ if uploaded_file is not None:
             st.session_state.selected_box_id = None
             st.rerun()
             
+    st.sidebar.write(f"**현재 파일:** {st.session_state.file_name}")
     st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 이미지와 원본 PDF 크기 가져오기
+    # 이미지 스케일링 설정 (700px 고정)
     full_bg, pdf_w, pdf_h = get_cached_bg_image(st.session_state.file_bytes, st.session_state.current_page)
+    canvas_w = 700
+    canvas_h = int(canvas_w * (pdf_h / pdf_w))
+    display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     
-    # [핵심] 캔버스 표시 너비를 고정하여 리사이징 에러 방지
-    canvas_display_width = 700
-    canvas_display_height = int(canvas_display_width * (pdf_h / pdf_w))
-    
-    # 화면 표시용 스케일된 이미지 생성
-    display_img = full_bg.resize((canvas_display_width, canvas_display_height), Image.LANCZOS).convert("RGBA")
-    
-    # 하이라이트 레이어
+    # 하이라이트 드로잉
     overlay = Image.new("RGBA", display_img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    
-    # PDF 좌표 -> 캔버스 좌표 변환 비율
-    pdf_to_canvas_ratio = canvas_display_width / pdf_w
+    pdf_to_canvas_ratio = canvas_w / pdf_w
 
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -116,7 +129,7 @@ if uploaded_file is not None:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**[PDF 뷰어] 영역을 드래그하세요 (화면 크기에 영향받지 않음)**")
+        st.write("**[PDF 뷰어] 영역을 드래그하여 추출하세요**")
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -124,8 +137,8 @@ if uploaded_file is not None:
             background_image=final_bg,
             initial_drawing=st.session_state.canvas_state,
             update_streamlit=True,
-            height=canvas_display_height,
-            width=canvas_display_width,
+            height=canvas_h,
+            width=canvas_w,
             drawing_mode="rect",
             key=f"canvas_p{st.session_state.current_page}",
         )
@@ -138,24 +151,21 @@ if uploaded_file is not None:
                 if st.session_state.last_canvas_sig != rect_sig:
                     st.session_state.last_canvas_sig = rect_sig
                     
-                    # 캔버스 좌표 -> 원본 PDF 좌표 역변환
-                    pdf_x0 = new_rect["left"] / pdf_to_canvas_ratio
-                    pdf_y0 = new_rect["top"] / pdf_to_canvas_ratio
-                    pdf_x1 = (new_rect["left"] + new_rect["width"]) / pdf_to_canvas_ratio
-                    pdf_y1 = (new_rect["top"] + new_rect["height"]) / pdf_to_canvas_ratio
+                    p_x0, p_y0 = new_rect["left"] / pdf_to_canvas_ratio, new_rect["top"] / pdf_to_canvas_ratio
+                    p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / pdf_to_canvas_ratio, (new_rect["top"] + new_rect["height"]) / pdf_to_canvas_ratio
                     
-                    if new_rect["width"] < 10: # 클릭 선택
+                    if new_rect["width"] < 10: 
                         clicked_id = None
                         for a in reversed(st.session_state.annotations):
                             if a['page_idx'] == st.session_state.current_page:
                                 rx0, ry0, rx1, ry1 = a['pdf_rect']
-                                if rx0 <= pdf_x0 <= rx1 and ry0 <= pdf_y0 <= ry1:
+                                if rx0 <= p_x0 <= rx1 and ry0 <= p_y0 <= ry1:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
-                    else: # 드래그 추출
+                    else: 
                         page = doc.load_page(st.session_state.current_page)
-                        fit_rect = fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
+                        fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
                         if autofit_enabled:
                             words = page.get_text("words")
                             matched = [fitz.Rect(w[:4]) for w in words if fitz.Rect(w[:4]).intersects(fit_rect)]
@@ -164,8 +174,6 @@ if uploaded_file is not None:
                                 for r in matched[1:]: fit_rect |= r
                         
                         text = clean_extracted_text(page.get_text("text", clip=fit_rect))
-                        
-                        # 고해상도 이미지 저장용
                         st.session_state.crop_counter += 1
                         img_name = f"crop_p{st.session_state.current_page+1}_{st.session_state.crop_counter:03d}.png"
                         img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
@@ -192,10 +200,9 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 좌표 표시 및 독립 스크롤 영역 ---
             st.markdown("""
                 <style>
-                .scroll-area {
+                .scroll-list {
                     max-height: 220px;
                     overflow-y: scroll;
                     border: 2px solid #4A90E2;
@@ -208,18 +215,16 @@ if uploaded_file is not None:
                 </style>
                 """, unsafe_allow_html=True)
 
-            st.markdown('<div class="scroll-area">', unsafe_allow_html=True)
-            def format_label_detail(aid):
+            st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
+            def format_label(aid):
                 a = anno_dict[aid]
                 r = a['pdf_rect']
                 coords = f"[X:{r[0]:.0f}, Y:{r[1]:.0f}, W:{r[2]-r[0]:.0f}, H:{r[3]-r[1]:.0f}]"
-                txt = a['text'][:20].replace('\n', ' ')
+                txt = a['text'][:25].replace('\n', ' ')
                 return f"[P{a['page_idx']+1}] {coords} | {txt}..."
 
-            selected_id = st.radio(
-                "항목 선택", options=valid_ids, format_func=format_label_detail,
-                index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed"
-            )
+            selected_id = st.radio("항목 선택", options=valid_ids, format_func=format_label,
+                                   index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
             
             if selected_id != st.session_state.selected_box_id:
@@ -230,8 +235,6 @@ if uploaded_file is not None:
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
             st.image(curr_anno['img_path'], use_column_width=True)
-            
-            # [수정] 텍스트 편집창 높이 축소
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180)
 
             c1, c2 = st.columns(2)
@@ -240,9 +243,11 @@ if uploaded_file is not None:
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text'], "image": a['img_name']} for a in st.session_state.annotations]
-            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="extracted.json", mime="application/json")
+            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name=f"extracted_{st.session_state.file_name}.json", mime="application/json")
         else:
             st.info("왼쪽에서 드래그하여 데이터를 추출하세요.")
+else:
+    st.info("👈 사이드바에서 PDF 파일을 업로드하거나, 실행 경로에 sample.pdf 파일을 넣어주세요.")
 
 # ==========================================
 # 4. JavaScript 단축키
