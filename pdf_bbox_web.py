@@ -31,7 +31,6 @@ if not os.path.exists(IMAGE_SAVE_DIR):
 # 2. 유틸리티 함수
 # ==========================================
 def clean_extracted_text(text):
-    """저자소개 제외 및 텍스트 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
@@ -103,15 +102,13 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev", use_column_width=True)
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next", use_column_width=True)
+    col_nav1.button("◀ 이전", on_click=go_prev, key="btn_prev")
+    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), key="btn_next")
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 배경 이미지 준비
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     
-    # 하이라이트 드로잉
     overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
     img_scale = 1.5 
@@ -141,7 +138,6 @@ if uploaded_file is not None:
             key=f"canvas_p{st.session_state.current_page}",
         )
 
-        # 캔버스 로직 (추출 및 선택)
         if canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             if objs:
@@ -152,7 +148,7 @@ if uploaded_file is not None:
                     p_x0, p_y0 = new_rect["left"] / img_scale, new_rect["top"] / img_scale
                     p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / img_scale, (new_rect["top"] + new_rect["height"]) / img_scale
                     
-                    if new_rect["width"] < 15: # 클릭 선택
+                    if new_rect["width"] < 15: 
                         clicked_id = None
                         for a in reversed(st.session_state.annotations):
                             if a['page_idx'] == st.session_state.current_page:
@@ -161,7 +157,7 @@ if uploaded_file is not None:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
-                    else: # 영역 추출
+                    else: 
                         page = doc.load_page(st.session_state.current_page)
                         fit_rect = get_autofit_rect(page, fitz.Rect(p_x0, p_y0, p_x1, p_y1), autofit_enabled)
                         raw_text = page.get_text("text", clip=fit_rect)
@@ -189,20 +185,20 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 5건 정도 노출 후 스크롤바가 생기도록 컨테이너 설정 ---
-            with st.container():
-                # CSS 주입으로 스크롤바 영역 강제 지정 (st.container의 height 기능 활용)
-                st.markdown('<style>div[data-testid="stVerticalBlock"] > div:has(div[data-testid="stRadio"]) { overflow-y: auto; }</style>', unsafe_allow_html=True)
-                
-                # 목록 영역 (높이 제한을 두어 스크롤 유도)
-                with st.container(height=200): 
-                    selected_id = st.radio(
-                        "항목 선택", 
-                        options=valid_ids, 
-                        format_func=lambda aid: f"[P{anno_dict[aid]['page_idx']+1}] {anno_dict[aid]['text'][:30].replace('\\n',' ')}...", 
-                        index=valid_ids.index(st.session_state.selected_box_id), 
-                        label_visibility="collapsed"
-                    )
+            # --- [수정] 5건 노출 스크롤 컨테이너 + SyntaxError 해결 ---
+            with st.container(height=230):
+                def format_label(aid):
+                    # f-string 내부에 백슬래시를 피하기 위해 중괄호 외부에서 replace 처리
+                    txt = anno_dict[aid]['text'][:30].replace('\n', ' ')
+                    return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
+
+                selected_id = st.radio(
+                    "항목 선택", 
+                    options=valid_ids, 
+                    format_func=format_label,
+                    index=valid_ids.index(st.session_state.selected_box_id), 
+                    label_visibility="collapsed"
+                )
             
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
@@ -212,21 +208,21 @@ if uploaded_file is not None:
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
             
-            # 자료유형 제거 후 추출 이미지와 텍스트 편집기 배치
-            st.image(curr_anno['img_path'], use_column_width=True, caption="추출 이미지")
-            curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=300)
+            # 자료유형 없이 이미지와 텍스트 편집기 바로 노출
+            st.image(curr_anno['img_path'], use_column_width=True)
+            curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=350)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제", key="btn_delete", use_column_width=True):
+            if c1.button("🗑️ 선택 항목 삭제", key="btn_delete"):
                 idx = st.session_state.annotations.index(curr_anno)
                 delete_box(idx, curr_anno['img_path'], True)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "text": a['text'], "bbox": a['pdf_rect'], "image": a['img_name']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted_data.json", mime="application/json", use_column_width=True)
+                               file_name="extracted.json", mime="application/json")
         else:
-            st.info("왼쪽 뷰어에서 영역을 드래그하면 이곳에 편집창이 나타납니다.")
+            st.info("왼쪽 뷰어에서 영역을 드래그하세요.")
 
 # ==========================================
 # 4. JavaScript 단축키
