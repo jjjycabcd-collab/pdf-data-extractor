@@ -137,7 +137,8 @@ with st.sidebar:
         col2.button("다음 ▶", on_click=go_next, args=(total_pages,), use_container_width=True)
         st.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
         
-        if st.button("🗑️ 현재 작업 전체 삭제", variant="danger"):
+        # 수정 후 (표준 방식)
+        if st.button("🗑️ 현재 작업 전체 삭제", type="primary"):
             clear_all_annotations()
             st.rerun()
 
