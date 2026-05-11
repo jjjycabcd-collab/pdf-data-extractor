@@ -1,130 +1,211 @@
 import streamlit as st
 import fitz  # PyMuPDF
 import json
-import time
+import os
 from PIL import Image
 import io
 from streamlit_drawable_canvas import st_canvas
 
-st.set_page_config(page_title="SI 데이터 추출 엔진", layout="wide")
+# ==========================================
+# 1. 페이지 및 상태 초기화
+# ==========================================
+st.set_page_config(layout="wide", page_title="SI 데이터 구축 엔진 - Web")
 
-# 세션 상태 관리
+if 'pdf_doc' not in st.session_state:
+    st.session_state.pdf_doc = None
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 0
 if 'annotations' not in st.session_state:
     st.session_state.annotations = []
-if 'page_idx' not in st.session_state:
-    st.session_state.page_idx = 0
+if 'crop_counter' not in st.session_state:
+    st.session_state.crop_counter = 0
 
-# 이미지 생성 함수 (안정성 강화)
-@st.cache_data
-def get_pdf_page_image(file_bytes, page_idx):
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    page = doc.load_page(page_idx)
-    # alpha=False로 배경을 불투명하게 강제 고정
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-    return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+# 이미지 임시 저장 경로 (Streamlit Cloud의 휘발성 파일 시스템 사용)
+IMAGE_SAVE_DIR = "extracted_images"
+if not os.path.exists(IMAGE_SAVE_DIR):
+    os.makedirs(IMAGE_SAVE_DIR)
 
-st.title("📄 문서 데이터 추출 엔진 - Web Prototype")
+# ==========================================
+# 2. 핵심 로직 함수 (기존 로직 유지)
+# ==========================================
+def get_autofit_rect(page, pdf_rect, autofit_enabled):
+    if not autofit_enabled: 
+        return pdf_rect
+    words = page.get_text("words")
+    fitted_rect = None
+    for w in words:
+        w_rect = fitz.Rect(w[:4])
+        if pdf_rect.intersects(w_rect):
+            fitted_rect = w_rect if fitted_rect is None else fitted_rect | w_rect 
+    return fitted_rect if fitted_rect else pdf_rect
 
-with st.sidebar:
-    st.header("⚙️ 설정")
-    uploaded_file = st.file_uploader("PDF 파일을 선택하세요", type=['pdf'])
-    autofit_enabled = st.checkbox("✨ 정밀 오토피팅(Word-level Snap)", value=True)
-    if st.button("🗑️ 모든 데이터 초기화"):
-        st.session_state.annotations = []
-        st.rerun()
+def get_sorted_text(page, rect):
+    words = page.get_text("words", clip=rect)
+    if not words: return ""
+    x_coords = sorted([w[0] for w in words])
+    gaps = [x_coords[i+1] - x_coords[i] for i in range(len(x_coords)-1)]
+    max_gap = max(gaps) if gaps else 0
+    threshold = rect.width * 0.15 
+    
+    if max_gap > threshold:
+        split_idx = gaps.index(max_gap)
+        split_x = (x_coords[split_idx] + x_coords[split_idx+1]) / 2
+        left_col = sorted([w for w in words if w[0] < split_x], key=lambda w: (w[1], w[0]))
+        right_col = sorted([w for w in words if w[0] >= split_x], key=lambda w: (w[1], w[0]))
+        sorted_words = left_col + right_col
+    else:
+        sorted_words = sorted(words, key=lambda w: (w[1], w[0]))
+    return " ".join([w[4] for w in sorted_words])
+
+def save_cropped_image(page, pdf_rect):
+    st.session_state.crop_counter += 1
+    page_num = st.session_state.current_page + 1
+    filename = f"crop_p{page_num}_{st.session_state.crop_counter:03d}.png"
+    filepath = os.path.join(IMAGE_SAVE_DIR, filename)
+    pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
+    pix.save(filepath)
+    return filename, filepath
+
+# ==========================================
+# 3. UI 및 메인 앱 로직
+# ==========================================
+st.title("📄 SI 데이터 구축 엔진 - Web Editor")
+
+# 파일 업로드
+uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
 if uploaded_file is not None:
-    file_bytes = uploaded_file.getvalue()
+    # PDF 로드
+    if st.session_state.pdf_doc is None:
+        pdf_bytes = uploaded_file.read()
+        st.session_state.pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        st.session_state.current_page = 0
+        st.session_state.annotations = []
+
+    doc = st.session_state.pdf_doc
+    total_pages = len(doc)
+
+    # 사이드바 설정
+    st.sidebar.markdown("---")
+    autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
-    # 페이지 네비게이션
-    nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
-    with nav_col1:
-        if st.button("◀ 이전 페이지") and st.session_state.page_idx > 0:
-            st.session_state.page_idx -= 1
-            st.rerun()
-    with nav_col2:
-        st.write(f"<h3 style='text-align: center;'>Page {st.session_state.page_idx + 1}</h3>", unsafe_allow_html=True)
-    with nav_col3:
-        # 다음 페이지 존재 확인 후 이동
-        doc_temp = fitz.open(stream=file_bytes, filetype="pdf")
-        if st.button("다음 페이지 ▶") and st.session_state.page_idx < len(doc_temp) - 1:
-            st.session_state.page_idx += 1
-            st.rerun()
+    col1, col2 = st.sidebar.columns(2)
+    if col1.button("◀ 이전") and st.session_state.current_page > 0:
+        st.session_state.current_page -= 1
+        st.rerun()
+    if col2.button("다음 ▶") and st.session_state.current_page < total_pages - 1:
+        st.session_state.current_page += 1
+        st.rerun()
+    
+    st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 이미지 로드
-    bg_image = get_pdf_page_image(file_bytes, st.session_state.page_idx)
-    w, h = bg_image.size
-    canvas_width = 800
-    canvas_height = int(canvas_width * (h / w))
+    # 현재 페이지 렌더링
+    page = doc.load_page(st.session_state.current_page)
+    # 해상도 조절 (scale_factor 2.0 수준)
+    zoom = 2.0
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat)
+    img_data = pix.tobytes("png")
+    bg_image = Image.open(io.BytesIO(img_data))
 
-    main_col, data_col = st.columns([2, 1])
+    # 메인 레이아웃 분할
+    left_col, right_col = st.columns([6, 4])
 
-    with main_col:
-        # 캔버스 위젯 (Key 값에 폼 이름을 넣어 중복 방지)
+    with left_col:
+        st.write("**PDF 뷰어 (드래그하여 영역 추출)**")
+        # Canvas를 이용한 Bounding Box 그리기
         canvas_result = st_canvas(
-            fill_color="rgba(0, 0, 255, 0.2)",
+            fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
-            stroke_color="#0000FF",
+            stroke_color="rgba(0, 0, 255, 0.8)",
             background_image=bg_image,
             update_streamlit=True,
-            width=canvas_width,
-            height=canvas_height,
+            height=bg_image.height,
+            width=bg_image.width,
             drawing_mode="rect",
-            # key가 바뀌어야 캔버스가 강제로 새로 그려집니다.
-            key=f"canvas_p{st.session_state.page_idx}_{len(st.session_state.annotations)}",
+            key=f"canvas_{st.session_state.current_page}",
         )
 
-        # 박스 생성 로직
+        # 캔버스에 그려진 객체 처리
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
-            # 현재 페이지에 그려진 박스 개수와 세션 저장 개수 비교
-            current_page_annos = [a for a in st.session_state.annotations if a['page'] == st.session_state.page_idx]
             
-            if len(objects) > len(current_page_annos):
-                latest = objects[-1]
-                pdf_scale = w / canvas_width
-                x0, y0 = latest["left"] * pdf_scale, latest["top"] * pdf_scale
-                x1 = (latest["left"] + latest["width"] * latest["scaleX"]) * pdf_scale
-                y1 = (latest["top"] + latest["height"] * latest["scaleY"]) * pdf_scale
+            # 캔버스에 새로 그려진 박스가 세션 상태보다 많으면 추출 로직 실행
+            current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
+            page_annotations = [a for a in st.session_state.annotations if a['page_idx'] == st.session_state.current_page]
+            
+            if len(current_canvas_objects) > len(page_annotations):
+                # 가장 마지막에 그려진 박스 가져오기
+                new_rect = current_canvas_objects[-1]
                 
-                doc = fitz.open(stream=file_bytes, filetype="pdf")
-                page = doc.load_page(st.session_state.page_idx)
-                user_rect = fitz.Rect(x0, y0, x1, y1)
+                # Canvas 좌표를 원본 PDF 좌표로 변환 (zoom 역연산)
+                x0 = new_rect["left"] / zoom
+                y0 = new_rect["top"] / zoom
+                x1 = (new_rect["left"] + new_rect["width"]) / zoom
+                y1 = (new_rect["top"] + new_rect["height"]) / zoom
                 
-                # 오토피팅
-                words = page.get_text("words")
-                final_rect = user_rect
-                if autofit_enabled:
-                    fitted = None
-                    for winfo in words:
-                        w_r = fitz.Rect(winfo[:4])
-                        if user_rect.intersects(w_r):
-                            fitted = w_r if fitted is None else fitted | w_r
-                    if fitted: final_rect = fitted
+                user_pdf_rect = fitz.Rect(x0, y0, x1, y1)
+                fitted_pdf_rect = get_autofit_rect(page, user_pdf_rect, autofit_enabled)
                 
-                extracted_text = " ".join([w[4] for w in words if final_rect.contains(fitz.Rect(w[:4]))])
+                text = get_sorted_text(page, fitted_pdf_rect)
+                img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
+                
+                new_anno = {
+                    'id': f"p{st.session_state.current_page}_{img_name}",
+                    'page_idx': st.session_state.current_page,
+                    'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
+                    'text': text,
+                    'img_name': img_name,
+                    'img_path': img_path
+                }
+                st.session_state.annotations.append(new_anno)
+                st.rerun() # UI 업데이트를 위해 리런
 
-                # 고유 타임스탬프를 ID로 사용하여 중복 방지
-                st.session_state.annotations.append({
-                    "id": float(time.time()), 
-                    "page": st.session_state.page_idx,
-                    "bbox": [final_rect.x0, final_rect.y0, final_rect.x1, final_rect.y1],
-                    "text": extracted_text
-                })
-                st.rerun()
-
-    with data_col:
-        st.subheader("📊 추출 데이터 목록")
-        # 역순으로 표시
-        for anno in reversed(st.session_state.annotations):
-            # 삭제 버튼 key에 타임스탬프 ID를 넣어 DuplicateWidgetID 방지
-            with st.expander(f"항목 (P{anno['page']+1})", expanded=True):
-                st.write(anno['text'])
-                if st.button(f"삭제", key=f"del_{anno['id']}"):
-                    st.session_state.annotations = [a for a in st.session_state.annotations if a['id'] != anno['id']]
+    with right_col:
+        st.write("**🔍 추출 목록 및 텍스트 편집기**")
+        
+        if not st.session_state.annotations:
+            st.info("왼쪽 뷰어에서 드래그하여 데이터를 추출해보세요.")
+        
+        for idx, anno in enumerate(st.session_state.annotations):
+            with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
+                # 크롭된 이미지 보여주기
+                if os.path.exists(anno['img_path']):
+                    st.image(anno['img_path'], use_container_width=True)
+                
+                # 텍스트 에디터
+                new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
+                if new_text != anno['text']:
+                    st.session_state.annotations[idx]['text'] = new_text
+                
+                # 삭제 버튼
+                if st.button("🗑️ 삭제", key=f"del_{idx}"):
+                    if os.path.exists(anno['img_path']):
+                        os.remove(anno['img_path'])
+                    st.session_state.annotations.pop(idx)
                     st.rerun()
 
+        # ==========================================
+        # 4. JSON 내보내기
+        # ==========================================
+        st.markdown("---")
         if st.session_state.annotations:
-            st.download_button("💾 JSON 다운로드", json.dumps(st.session_state.annotations, indent=4, ensure_ascii=False), "result.json")
+            export_data = []
+            for anno in st.session_state.annotations:
+                export_data.append({
+                    "page": anno['page_idx'] + 1,
+                    "bbox": [round(x, 2) for x in anno['pdf_rect']],
+                    "image_file": anno['img_name'],
+                    "text": anno['text']
+                })
+            
+            json_string = json.dumps(export_data, ensure_ascii=False, indent=4)
+            st.download_button(
+                label="💾 JSON 결과 최종 추출 (다운로드)",
+                data=json_string,
+                file_name="extracted_data.json",
+                mime="application/json",
+                use_container_width=True
+            )
 else:
-    st.info("좌측에서 PDF를 업로드하면 분석이 시작됩니다.")
+    st.info("👈 사이드바에서 PDF 파일을 업로드하여 작업을 시작하세요.")
