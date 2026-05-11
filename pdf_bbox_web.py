@@ -12,7 +12,6 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# 세션 상태 관리
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
@@ -34,16 +33,6 @@ def clean_text(text):
     lines = text.split('\n')
     return "\n".join([line.strip() for line in lines if "저자소개" not in line and line.strip()])
 
-def go_prev():
-    if st.session_state.current_page > 0:
-        st.session_state.current_page -= 1
-        st.session_state.selected_box_id = None
-
-def go_next(total_pages):
-    if st.session_state.current_page < total_pages - 1:
-        st.session_state.current_page += 1
-        st.session_state.selected_box_id = None
-
 def delete_single_item(anno_obj):
     if anno_obj:
         if os.path.exists(anno_obj['img_path']):
@@ -61,7 +50,7 @@ def get_page_image(file_bytes, page_idx):
     return img, page.rect.width, page.rect.height
 
 # ==========================================
-# 3. 파일 로드 및 초기화 로직
+# 3. 파일 로드 로직
 # ==========================================
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -93,20 +82,28 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
+    
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev, use_container_width=True)
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), use_container_width=True)
-    st.sidebar.write(f"**현재 파일:** {st.session_state.file_name}")
-    st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
+    if col_nav1.button("◀ 이전"):
+        st.session_state.current_page = max(0, st.session_state.current_page - 1)
+        st.session_state.selected_box_id = None
+        st.rerun()
+    if col_nav2.button("다음 ▶"):
+        st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1)
+        st.session_state.selected_box_id = None
+        st.rerun()
+            
+    st.sidebar.write(f"**파일:** {st.session_state.file_name}")
+    st.sidebar.write(f"**페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 좌표 안정화 (700px 고정)
+    # 캔버스 크기 및 스케일 설정
     full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
     canvas_w = 700
     canvas_h = int(canvas_w * (pdf_h / pdf_w))
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
-    # --- [핵심] 캔버스 초기 데이터(Fabric.js JSON) 생성 ---
+    # Fabric.js 객체 생성 (기존 태그들)
     fabric_objects = []
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -121,18 +118,24 @@ if st.session_state.file_bytes:
                 "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
                 "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
                 "strokeWidth": 3 if is_sel else 2,
-                "id": anno['id']
+                "id": anno['id']  # 커스텀 ID 저장
             })
     
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
-    
-    # 선택 여부에 따른 모드 설정
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**[PDF 뷰어] " + ("선택 항목 편집 모드" if tag_mode=="transform" else "새 영역 드래그 모드") + "**")
+        # 모드 안내 및 선택 해제 버튼
+        status_txt = "🔧 영역 수정 모드 (박스 핸들을 드래그하세요)" if tag_mode=="transform" else "🖋️ 새 영역 태깅 모드 (드래그하여 박스를 그리세요)"
+        st.write(f"**{status_txt}**")
+        
+        if tag_mode == "transform":
+            if st.button("➕ 새 영역 추가하러 가기 (선택 해제)"):
+                st.session_state.selected_box_id = None
+                st.rerun()
+
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -143,40 +146,44 @@ if st.session_state.file_bytes:
             height=canvas_h,
             width=canvas_w,
             drawing_mode=tag_mode,
-            display_toolbar=False, # 아이콘 제거
-            key=f"canvas_p{st.session_state.current_page}_{tag_mode}",
+            display_toolbar=False,
+            key=f"canvas_p{st.session_state.current_page}_m{tag_mode}",
         )
 
-        # 캔버스 결과 처리
+        # 캔버스 상호작용 로직
         if canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
-            if objs:
-                last_obj = objs[-1]
-                # 변형 모드일 때 기존 박스 정보 업데이트 로직(생략 가능하나 구조 유지)
-                if tag_mode == "transform":
-                    # 편집 완료 후 상태 반영을 원하면 여기에 추가 로직 필요
-                    pass
-                else:
-                    # 신규 사각형 생성 로직
-                    rect_sig = str(last_obj['left']) + "_" + str(last_obj['width'])
+            
+            if tag_mode == "transform":
+                # [편집 모드] 조정된 좌표를 실시간 업데이트
+                for obj in objs:
+                    if "id" in obj:
+                        for anno in st.session_state.annotations:
+                            if anno['id'] == obj['id']:
+                                # 캔버스 좌표 -> 원본 PDF 좌표로 역변환하여 저장
+                                new_x0 = obj['left'] / pdf_to_canvas_ratio
+                                new_y0 = obj['top'] / pdf_to_canvas_ratio
+                                new_x1 = new_x0 + (obj['width'] * obj['scaleX']) / pdf_to_canvas_ratio
+                                new_y1 = new_y0 + (obj['height'] * obj['scaleY']) / pdf_to_canvas_ratio
+                                anno['pdf_rect'] = [new_x0, new_y0, new_x1, new_y1]
+            else:
+                # [그리기 모드] 새 박스 생성
+                if objs:
+                    last_obj = objs[-1]
+                    rect_sig = f"{last_obj['left']}_{last_obj['width']}_{len(objs)}"
                     if st.session_state.last_canvas_sig != rect_sig:
                         st.session_state.last_canvas_sig = rect_sig
-                        p_x0, p_y0 = last_obj["left"] / pdf_to_canvas_ratio, last_obj["top"] / pdf_to_canvas_ratio
-                        p_x1, p_y1 = p_x0 + (last_obj["width"] / pdf_to_canvas_ratio), p_y0 + (last_obj["height"] / pdf_to_canvas_ratio)
                         
-                        if last_obj["width"] < 10: # 클릭 시 선택
-                            clicked_id = None
-                            for a in reversed(st.session_state.annotations):
-                                if a['page_idx'] == st.session_state.current_page:
-                                    rx0, ry0, rx1, ry1 = a['pdf_rect']
-                                    if rx0 <= p_x0 <= rx1 and ry0 <= p_y0 <= ry1:
-                                        clicked_id = a['id']
-                                        break
-                            st.session_state.selected_box_id = clicked_id
-                            st.rerun()
-                        else: # 드래그 시 추출
+                        p_x0 = last_obj["left"] / pdf_to_canvas_ratio
+                        p_y0 = last_obj["top"] / pdf_to_canvas_ratio
+                        p_x1 = p_x0 + (last_obj["width"] / pdf_to_canvas_ratio)
+                        p_y1 = p_y0 + (last_obj["height"] / pdf_to_canvas_ratio)
+                        
+                        if last_obj["width"] > 5: # 드래그 시 추출
                             page = doc.load_page(st.session_state.current_page)
                             fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
+                            
+                            # 오토피팅
                             if autofit_enabled:
                                 words = page.get_text("words")
                                 matched = [fitz.Rect(w[:4]) for w in words if fitz.Rect(w[:4]).intersects(fit_rect)]
@@ -202,27 +209,23 @@ if st.session_state.file_bytes:
     with right_col:
         st.subheader("데이터 추출 목록")
         if st.session_state.annotations:
+            # 목록 정렬 (페이지 순)
             anno_dict = {a['id']: a for a in st.session_state.annotations}
             valid_ids = list(anno_dict.keys())
+            
             if st.session_state.selected_box_id not in valid_ids:
-                st.session_state.selected_box_id = valid_ids[-1]
+                st.session_state.selected_box_id = valid_ids[-1] if valid_ids else None
 
-            # 독립 스크롤바 영역 (5건 기준)
-            st.markdown("""
-                <style>
-                .list-area { max-height: 220px; overflow-y: scroll; border: 2px solid #4A90E2; border-radius: 8px; padding: 10px; background-color: #f9f9f9; margin-bottom: 10px; }
-                div[data-testid="stRadio"] > div { gap: 2px; }
-                </style>
-                """, unsafe_allow_html=True)
-
-            st.markdown('<div class="list-area">', unsafe_allow_html=True)
+            # 스크롤 목록
+            st.markdown("""<style>.scroll-v { max-height: 200px; overflow-y: auto; border: 2px solid #4A90E2; border-radius: 8px; padding: 5px; background: #f9f9f9; }</style>""", unsafe_allow_html=True)
+            st.markdown('<div class="scroll-v">', unsafe_allow_html=True)
+            
             def format_label(aid):
                 a = anno_dict[aid]
                 r = a['pdf_rect']
-                coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
-                return "[P" + str(a['page_idx']+1) + "] " + coords + " | " + a['text'][:20].replace('\n', ' ') + "..."
+                return f"[P{a['page_idx']+1}] [X:{int(r[0])}, Y:{int(r[1])}] | {a['text'][:25]}..."
 
-            selected_id = st.radio("항목 선택", options=valid_ids, format_func=format_label,
+            selected_id = st.radio("선택", options=valid_ids, format_func=format_label,
                                    index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
             
@@ -234,43 +237,20 @@ if st.session_state.file_bytes:
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
             st.image(curr_anno['img_path'], use_column_width=True)
-            curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180) # 크기 축소
+            curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제", use_container_width=True, type="primary"):
+            if c1.button("🗑️ 삭제", use_container_width=True, type="primary"):
                 delete_single_item(curr_anno)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted.json", mime="application/json", use_container_width=True)
+                               file_name="result.json", mime="application/json", use_container_width=True)
         else:
-            st.info("왼쪽 뷰어에서 영역을 드래그하세요.")
-else:
-    st.info("👈 PDF 파일을 업로드하거나 sample.pdf를 준비해 주세요.")
+            st.info("영역을 드래그하여 태깅을 시작하세요.")
 
 # ==========================================
 # 5. JavaScript 단축키
 # ==========================================
-components.html(
-    """
-    <script>
-    const doc = window.parent.document;
-    doc.addEventListener('keydown', function(e) {
-        if (e.key === 'ArrowLeft') {
-            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('이전'));
-            if (btn) btn.click();
-        } else if (e.key === 'ArrowRight') {
-            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음'));
-            if (btn) btn.click();
-        } else if (e.key === 'Delete' || e.key === 'Backspace') {
-            if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
-                const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
-                if (btn) btn.click();
-            }
-        }
-    });
-    </script>
-    """,
-    height=0,
-)
+components.html("""<script>const doc = window.parent.document; doc.addEventListener('keydown', function(e) { if (e.key === 'ArrowLeft') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('이전')); if (btn) btn.click(); } else if (e.key === 'ArrowRight') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음')); if (btn) btn.click(); } else if (e.key === 'Delete' || e.key === 'Backspace') { if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제')); if (btn) btn.click(); } } });</script>""", height=0)
