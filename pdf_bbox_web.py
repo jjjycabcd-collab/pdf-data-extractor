@@ -22,7 +22,6 @@ if 'annotations' not in st.session_state:
 if 'crop_counter' not in st.session_state:
     st.session_state.crop_counter = 0
 
-# ★ 연동을 위한 상태 변수 추가 ★
 if 'selected_box_id' not in st.session_state:
     st.session_state.selected_box_id = None
 if 'canvas_key_counter' not in st.session_state:
@@ -33,7 +32,30 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 핵심 로직 & 캐싱
+# 2. 버튼 콜백 함수 (오류 없는 페이지 이동을 위함)
+# ==========================================
+def go_prev():
+    if st.session_state.current_page > 0:
+        st.session_state.current_page -= 1
+        st.session_state.selected_box_id = None
+
+def go_next(total_pages):
+    if st.session_state.current_page < total_pages - 1:
+        st.session_state.current_page += 1
+        st.session_state.selected_box_id = None
+
+def select_box(box_id):
+    st.session_state.selected_box_id = box_id
+
+def delete_box(idx, img_path, is_selected):
+    if os.path.exists(img_path):
+        os.remove(img_path)
+    st.session_state.annotations.pop(idx)
+    if is_selected:
+        st.session_state.selected_box_id = None
+
+# ==========================================
+# 3. 핵심 로직 & 캐싱
 # ==========================================
 @st.cache_data(show_spinner=False)
 def get_cached_bg_bytes(file_bytes, page_idx):
@@ -82,7 +104,7 @@ def save_cropped_image(page, pdf_rect):
     return filename, filepath
 
 # ==========================================
-# 3. UI 및 메인 앱 로직
+# 4. UI 및 메인 앱 로직
 # ==========================================
 st.title("📄 SI 데이터 구축 엔진 - Web Editor")
 
@@ -106,38 +128,37 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col1, col2 = st.sidebar.columns(2)
-    if col1.button("◀ 이전") and st.session_state.current_page > 0:
-        st.session_state.current_page -= 1
-        st.session_state.selected_box_id = None
-        st.rerun()
-    if col2.button("다음 ▶") and st.session_state.current_page < total_pages - 1:
-        st.session_state.current_page += 1
-        st.session_state.selected_box_id = None
-        st.rerun()
+    # Streamlit 콜백 방식을 적용하여 버튼 오류 원천 차단
+    col1.button("◀ 이전", on_click=go_prev)
+    col2.button("다음 ▶", on_click=go_next, args=(total_pages,))
     
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
-    # ★ 기존 박스들을 배경 이미지에 직접 렌더링 (하이라이트 포함) ★
+    # ★ 투명도 합성 완벽 해결 로직 ★
     # ==========================================
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     view_zoom = 1.0 
     
-    # PIL을 사용하여 배경 이미지 위에 박스들을 물리적으로 그립니다.
-    draw = ImageDraw.Draw(bg_image, "RGBA")
+    # 텍스트가 가려지지 않도록 빈 투명 레이어(Overlay)를 생성하여 그 위에 박스를 그립니다.
+    overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+    
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
             x0, y0, x1, y1 = anno['pdf_rect']
             zx0, zy0, zx1, zy1 = x0 * view_zoom, y0 * view_zoom, x1 * view_zoom, y1 * view_zoom
             
-            # 선택된 박스는 빨간색, 나머지는 파란색으로 렌더링
             if st.session_state.selected_box_id == anno['id']:
-                draw.rectangle([zx0, zy0, zx1, zy1], outline=(255, 0, 0, 255), width=4)
-                draw.rectangle([zx0, zy0, zx1, zy1], fill=(255, 0, 0, 40))
+                draw.rectangle([zx0, zy0, zx1, zy1], outline=(255, 0, 0, 255), width=3)
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(255, 0, 0, 50)) # 맑은 빨간색 투명
             else:
                 draw.rectangle([zx0, zy0, zx1, zy1], outline=(0, 0, 255, 255), width=2)
-                draw.rectangle([zx0, zy0, zx1, zy1], fill=(0, 0, 255, 20))
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(0, 0, 255, 30)) # 맑은 파란색 투명
+
+    # 원본 배경과 투명 박스 레이어를 완벽하게 병합
+    bg_image = Image.alpha_composite(bg_image, overlay)
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -145,7 +166,6 @@ if uploaded_file is not None:
     with left_col:
         st.write("**PDF 뷰어 (새로운 영역 드래그 추출)**")
         
-        # 캔버스는 오직 "새로운 영역을 그릴 때"만 사용됩니다.
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -155,7 +175,6 @@ if uploaded_file is not None:
             height=int(bg_image.height),
             width=int(bg_image.width),
             drawing_mode="rect",
-            # 키값이 바뀔 때마다 캔버스 찌꺼기 초기화
             key=f"canvas_{st.session_state.current_page}_{st.session_state.canvas_key_counter}",
         )
 
@@ -163,7 +182,7 @@ if uploaded_file is not None:
             objects = canvas_result.json_data["objects"]
             current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
             
-            # 캔버스에 새로 그려진 도형이 있다면 처리
+            # ★ 버그 수정: 무조건 새로 그려진 박스가 있으면 처리하도록 로직 단순화
             if len(current_canvas_objects) > 0:
                 new_rect = current_canvas_objects[-1]
                 page = doc.load_page(st.session_state.current_page)
@@ -190,7 +209,7 @@ if uploaded_file is not None:
                 }
                 st.session_state.annotations.append(new_anno)
                 
-                # 방금 그린 박스를 하이라이트 상태로 만들고 캔버스 리셋
+                # 추출 직후 해당 박스 포커싱 및 캔버스 초기화
                 st.session_state.selected_box_id = anno_id
                 st.session_state.canvas_key_counter += 1
                 st.rerun() 
@@ -202,16 +221,13 @@ if uploaded_file is not None:
             st.info("왼쪽 뷰어에서 드래그하여 데이터를 추출해보세요.")
         
         for idx, anno in enumerate(st.session_state.annotations):
-            # 배경색상을 다르게 하여 현재 선택된 아코디언을 시각적으로 구분 (가상 느낌 부여)
             is_selected = (st.session_state.selected_box_id == anno['id'])
             expander_title = f"🌟 Page {anno['page_idx'] + 1} - {anno['img_name']}" if is_selected else f"Page {anno['page_idx'] + 1} - {anno['img_name']}"
             
             with st.expander(expander_title, expanded=is_selected):
                 
-                # ★ 연동 버튼 추가 ★
-                if st.button("🎯 왼쪽 캔버스에서 이 영역 위치 확인", key=f"focus_{idx}"):
-                    st.session_state.selected_box_id = anno['id']
-                    st.rerun()
+                # 콜백 함수를 이용한 연동 (버튼 씹힘 완벽 해결)
+                st.button("🎯 왼쪽 캔버스에서 이 영역 위치 확인", key=f"focus_{idx}", on_click=select_box, args=(anno['id'],))
                 
                 if os.path.exists(anno['img_path']):
                     st.image(anno['img_path'], use_column_width=True)
@@ -220,14 +236,8 @@ if uploaded_file is not None:
                 if new_text != anno['text']:
                     st.session_state.annotations[idx]['text'] = new_text
                 
-                if st.button("🗑️ 삭제", key=f"del_{idx}"):
-                    if os.path.exists(anno['img_path']):
-                        os.remove(anno['img_path'])
-                    st.session_state.annotations.pop(idx)
-                    # 삭제한 항목이 현재 하이라이트 상태였다면 초기화
-                    if is_selected:
-                        st.session_state.selected_box_id = None
-                    st.rerun()
+                # 삭제 버튼 콜백 연동
+                st.button("🗑️ 삭제", key=f"del_{idx}", on_click=delete_box, args=(idx, anno['img_path'], is_selected))
 
         st.markdown("---")
         if st.session_state.annotations:
