@@ -10,9 +10,9 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 # 1. 페이지 및 상태 초기화
 # ==========================================
-st.set_page_config(layout="wide", page_title="SI 데이터 구축 엔진 Pro")
+st.set_page_config(layout="wide", page_title="상호작업 데이터 구축 - Web Editor")
 
-# 상태 관리 변수 리스트
+# 세션 상태 초기값 설정
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
@@ -29,23 +29,28 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 유틸리티 및 분류 로직
+# 2. 핵심 유틸리티 및 데이터 정제 로직
 # ==========================================
 def classify_material(text):
-    """텍스트 내용을 분석하여 기본 자료유형을 추천 (기존 규칙 반영)"""
-    text = text.lower()
-    if any(keyword in text for keyword in ["표준", "지침", "isbn", "도서"]):
+    """텍스트 내용을 분석하여 정의된 규칙에 따라 자료유형 분류"""
+    text_content = text.replace(" ", "").lower()
+    
+    # 단행본 분류 규칙: 표준, 지침, 도서
+    if any(kw in text_content for kw in ["표준", "지침", "도서"]):
         return "단행본"
-    if any(keyword in text for keyword in ["보도자료", "신문", "연보", "뉴스"]):
+    
+    # 기타 분류 규칙: 보도자료, 신문, 연보
+    if any(kw in text_content for kw in ["보도자료", "신문", "연보"]):
         return "기타"
+        
     return "단행본" # 기본값
 
 def clean_extracted_text(text):
-    """저자소개 등 불필요한 패턴 제거 (참고문헌 추출 최적화)"""
-    # 간단한 정규표현식 예시: 저자소개 문구 이후를 잘라내거나 정제
+    """추출된 텍스트에서 저자소개 관련 내용을 제외하고 정제"""
     lines = text.split('\n')
-    cleaned_lines = [line for line in lines if "저자소개" not in line and "profile" not in line.lower()]
-    return "\n".join(cleaned_lines).strip()
+    # '저자소개' 단어가 포함된 라인 및 불필요한 공백 제거
+    cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
+    return "\n".join(cleaned_lines)
 
 # ==========================================
 # 3. 버튼 콜백 함수
@@ -76,13 +81,12 @@ def clear_all_annotations():
     st.session_state.selected_box_id = None
 
 # ==========================================
-# 4. 핵심 로직 & 캐싱
+# 4. PDF 처리 및 이미지 추출 로직
 # ==========================================
 @st.cache_data(show_spinner=False)
 def get_cached_bg_bytes(file_bytes, page_idx):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page = doc.load_page(page_idx)
-    # 고해상도 렌더링 (2.0배)
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
     return pix.tobytes("png")
 
@@ -97,7 +101,7 @@ def get_autofit_rect(page, pdf_rect, autofit_enabled):
     return fitted_rect if fitted_rect else pdf_rect
 
 def get_sorted_text(page, rect):
-    # 텍스트 추출 및 기본적인 정제 적용
+    # 영역 내 텍스트를 추출한 뒤 저자소개 제외 로직 적용
     raw_text = page.get_text("text", clip=rect)
     return clean_extracted_text(raw_text)
 
@@ -105,24 +109,24 @@ def save_cropped_image(page, pdf_rect):
     st.session_state.crop_counter += 1
     filename = f"crop_p{st.session_state.current_page+1}_{st.session_state.crop_counter:03d}.png"
     filepath = os.path.join(IMAGE_SAVE_DIR, filename)
+    # 고해상도 크롭 (3.0배)
     pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
     pix.save(filepath)
     return filename, filepath
 
 # ==========================================
-# 5. UI 및 메인 앱 로직
+# 5. UI 레이아웃 및 메인 로직
 # ==========================================
-st.title("📄 SI 데이터 구축 엔진 - Web Editor")
+st.title("📄 상호작업 데이터 구축 - Web Editor")
 
 with st.sidebar:
-    uploaded_file = st.file_uploader("PDF 업로드", type=["pdf"])
+    uploaded_file = st.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
     st.markdown("---")
     
     if uploaded_file:
         if st.session_state.file_name != uploaded_file.name:
-            file_bytes = uploaded_file.read()
-            st.session_state.file_bytes = file_bytes
-            st.session_state.pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+            st.session_state.file_bytes = uploaded_file.read()
+            st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
             st.session_state.file_name = uploaded_file.name
             st.session_state.annotations = []
             st.rerun()
@@ -130,50 +134,47 @@ with st.sidebar:
         doc = st.session_state.pdf_doc
         total_pages = len(doc)
         
-        autofit_enabled = st.checkbox("✨ 정밀 오토피팅 (텍스트 경계 맞춤)", value=True)
+        autofit_enabled = st.checkbox("✨ 정밀 오토피팅 모드", value=True)
         
         col1, col2 = st.columns(2)
         col1.button("◀ 이전", on_click=go_prev, use_container_width=True)
         col2.button("다음 ▶", on_click=go_next, args=(total_pages,), use_container_width=True)
         st.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
         
-        # 수정 후 (표준 방식)
-        if st.button("🗑️ 현재 작업 전체 삭제", type="primary"):
+        # [수정 사항] variant="danger" 삭제 후 type="primary" 적용하여 오류 해결
+        if st.button("🗑️ 현재 작업 전체 삭제", type="primary", use_container_width=True):
             clear_all_annotations()
             st.rerun()
 
 if st.session_state.file_bytes:
-    # PDF 배경 로드 (캐시 활용)
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     
-    # 캔버스 크기 조정을 위한 비율 계산
+    # 캔버스 크기 및 스케일 계산
     canvas_width = 800 
     scale = canvas_width / bg_image.width
     canvas_height = int(bg_image.height * scale)
     display_image = bg_image.resize((canvas_width, canvas_height))
-
-    # 하이라이트 박스 그리기
+    
+    # 추출된 박스 하이라이트 레이어
     overlay = Image.new("RGBA", display_image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    
-    # PDF 좌표 -> 캔버스 좌표 변환 상수 (fitz 72dpi 기준, bg_image는 2배 확대된 상태이므로 조정 필요)
-    # get_pixmap(matrix=2,2) 했으므로 원본 PDF 좌표에 2를 곱한 것이 bg_image 크기
-    pdf_to_img_scale = 2.0 * scale 
+    pdf_to_img_scale = 2.0 * scale # get_pixmap에서 Matrix(2,2)를 사용했으므로
 
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
             x0, y0, x1, y1 = [c * pdf_to_img_scale for c in anno['pdf_rect']]
-            is_selected = st.session_state.selected_box_id == anno['id']
-            color = (255, 0, 0, 255) if is_selected else (0, 0, 255, 180)
-            fill = (255, 0, 0, 40) if is_selected else (0, 0, 255, 20)
-            draw.rectangle([x0, y0, x1, y1], outline=color, width=3 if is_selected else 2, fill=fill)
+            is_selected = (st.session_state.selected_box_id == anno['id'])
+            outline_color = (255, 0, 0, 255) if is_selected else (0, 0, 255, 180)
+            fill_color = (255, 0, 0, 40) if is_selected else (0, 0, 255, 20)
+            draw.rectangle([x0, y0, x1, y1], outline=outline_color, width=3 if is_selected else 2, fill=fill_color)
 
     final_bg = Image.alpha_composite(display_image, overlay)
 
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
+        st.write("**PDF 뷰어 (드래그하여 영역 추출 / 박스 클릭하여 선택)**")
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -184,7 +185,7 @@ if st.session_state.file_bytes:
             height=canvas_height,
             width=canvas_width,
             drawing_mode="rect",
-            key=f"canvas_{st.session_state.current_page}",
+            key=f"canvas_p{st.session_state.current_page}",
         )
 
         if canvas_result.json_data:
@@ -196,14 +197,13 @@ if st.session_state.file_bytes:
                 if st.session_state.last_canvas_sig != rect_sig:
                     st.session_state.last_canvas_sig = rect_sig
                     
-                    # 캔버스 좌표 -> PDF 좌표 역변환
                     pdf_x0 = new_rect["left"] / pdf_to_img_scale
                     pdf_y0 = new_rect["top"] / pdf_to_img_scale
                     pdf_x1 = (new_rect["left"] + new_rect["width"]) / pdf_to_img_scale
                     pdf_y1 = (new_rect["top"] + new_rect["height"]) / pdf_to_img_scale
                     
                     if new_rect["width"] < 10 and new_rect["height"] < 10:
-                        # 클릭(선택) 모직
+                        # 단순 클릭 시 선택 전환
                         clicked_id = None
                         for anno in reversed(st.session_state.annotations):
                             if anno['page_idx'] == st.session_state.current_page:
@@ -213,7 +213,7 @@ if st.session_state.file_bytes:
                                     break
                         st.session_state.selected_box_id = clicked_id
                     else:
-                        # 신규 추출 모직
+                        # 드래그 시 데이터 추출
                         page = st.session_state.pdf_doc.load_page(st.session_state.current_page)
                         fit_rect = get_autofit_rect(page, fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1), autofit_enabled)
                         text = get_sorted_text(page, fit_rect)
@@ -225,7 +225,7 @@ if st.session_state.file_bytes:
                             'page_idx': st.session_state.current_page,
                             'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                             'text': text,
-                            'type': classify_material(text),
+                            'type': classify_material(text), # 자동 분류 적용
                             'img_name': img_name,
                             'img_path': img_path
                         })
@@ -236,40 +236,44 @@ if st.session_state.file_bytes:
                     st.rerun()
 
     with right_col:
+        st.write("**🔍 추출 데이터 편집기**")
         if st.session_state.annotations:
-            # 선택된 항목 찾기
+            # 현재 선택된 항목 매칭
             selected_anno = next((a for a in st.session_state.annotations if a['id'] == st.session_state.selected_box_id), st.session_state.annotations[-1])
             
-            st.subheader("🧐 데이터 상세 편집")
-            st.image(selected_anno['img_path'], caption="추출 영역 스캔본")
+            if os.path.exists(selected_anno['img_path']):
+                st.image(selected_anno['img_path'], use_container_width=True)
             
-            # 자료유형 관리
-            selected_anno['type'] = st.selectbox("자료유형 분류", ["단행본", "기타"], 
-                                             index=0 if selected_anno['type'] == "단행본" else 1)
+            # 자료유형 및 텍스트 편집
+            m_types = ["단행본", "기타"]
+            selected_anno['type'] = st.selectbox("자료유형 분류", m_types, 
+                                             index=m_types.index(selected_anno['type']) if selected_anno['type'] in m_types else 0)
             
-            # 텍스트 편집
-            selected_anno['text'] = st.text_area("텍스트 내용 (저자소개 자동 필터링됨)", value=selected_anno['text'], height=250)
+            selected_anno['text'] = st.text_area("내용 편집 (저자소개 필터링됨)", value=selected_anno['text'], height=250)
             
-            col_del, col_exp = st.columns(2)
-            if col_del.button("🗑️ 삭제", use_container_width=True):
+            # 삭제 및 다운로드 버튼
+            c1, c2 = st.columns(2)
+            if c1.button("🗑️ 삭제", use_container_width=True):
                 idx = st.session_state.annotations.index(selected_anno)
                 delete_box(idx, selected_anno['img_path'])
                 st.rerun()
 
-            # 전체 내보내기
             export_data = [{
                 "page": a['page_idx'] + 1,
                 "type": a['type'],
                 "text": a['text'],
-                "bbox": a['pdf_rect']
+                "bbox": [round(val, 2) for val in a['pdf_rect']],
+                "image": a['img_name']
             } for a in st.session_state.annotations]
             
-            col_exp.download_button(
-                "💾 JSON 다운로드",
+            c2.download_button(
+                "💾 JSON 결과 추출",
                 data=json.dumps(export_data, ensure_ascii=False, indent=4),
-                file_name=f"SI_Extract_{st.session_state.file_name}.json",
+                file_name=f"Result_{st.session_state.file_name}.json",
                 mime="application/json",
                 use_container_width=True
             )
         else:
-            st.info("💡 PDF에서 영역을 드래그하여 데이터를 추출하세요.")
+            st.info("왼쪽 뷰어에서 영역을 드래그하여 데이터 구축을 시작하세요.")
+else:
+    st.info("👈 사이드바에서 PDF 파일을 업로드하세요.")
