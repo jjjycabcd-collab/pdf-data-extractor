@@ -3,7 +3,6 @@ import fitz  # PyMuPDF
 import json
 import os
 from PIL import Image
-import io
 from streamlit_drawable_canvas import st_canvas
 
 # ==========================================
@@ -105,10 +104,11 @@ if uploaded_file is not None:
     zoom = 2.0
     mat = fitz.Matrix(zoom, zoom)
     
-    # [수정됨] alpha=False를 적용하여 투명 배경을 강제로 흰색으로 만들고, RGB로 변환
+    # [최종 패치] 투명 배경 제거(alpha=False) 및 메모리 증발 방지를 위한 물리적 파일 저장
     pix = page.get_pixmap(matrix=mat, alpha=False)
-    img_data = pix.tobytes("png")
-    bg_image = Image.open(io.BytesIO(img_data)).convert("RGB")
+    bg_img_path = os.path.join(IMAGE_SAVE_DIR, f"bg_page_{st.session_state.current_page}.png")
+    pix.save(bg_img_path)
+    bg_image = Image.open(bg_img_path)
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -173,8 +173,9 @@ if uploaded_file is not None:
             with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
                 # 크롭된 이미지 보여주기
                 if os.path.exists(anno['img_path']):
-                    # [수정됨] use_container_width 대신 use_column_width 사용 (버전 호환성 문제 해결)
-                    st.image(anno['img_path'], use_column_width=True)
+                    # [최종 패치] 경로 직접 참조 대신 PIL Image 로드 및 use_column_width 사용
+                    crop_img = Image.open(anno['img_path'])
+                    st.image(crop_img, use_column_width=True)
                 
                 # 텍스트 에디터
                 new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
