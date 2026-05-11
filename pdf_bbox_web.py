@@ -61,7 +61,7 @@ def save_cropped_image(page, pdf_rect):
     page_num = st.session_state.current_page + 1
     filename = f"crop_p{page_num}_{st.session_state.crop_counter:03d}.png"
     filepath = os.path.join(IMAGE_SAVE_DIR, filename)
-    # 데이터 추출용 크롭 이미지는 고해상도(3.0) 유지
+    # 데이터 추출용은 초고화질(3.0) 유지
     pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
     pix.save(filepath)
     return filename, filepath
@@ -99,18 +99,25 @@ if uploaded_file is not None:
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
-    # ★ 하얀 캔버스 완벽 해결 렌더링 로직 ★
+    # ★ 하얀 캔버스 완벽 해결의 핵심 로직 ★
     # ==========================================
     page = doc.load_page(st.session_state.current_page)
     
-    # 웹 화면 렌더링용 줌 (네트워크 과부하 차단을 위해 1.0으로 고정)
+    # 뷰어 해상도 세팅
     view_zoom = 1.0 
     mat = fitz.Matrix(view_zoom, view_zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
     
-    # 임시 버퍼(BytesIO) 일절 금지. 픽셀 데이터를 물리 메모리에서 직접 PIL Image로 강제 생성
-    # 이 방식은 Python 가비지 컬렉터가 이미지를 지우는 것을 완벽하게 막아줍니다.
-    bg_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    # 1. 배경 이미지를 물리적 파일로 확실히 저장
+    bg_img_filename = f"bg_{st.session_state.file_name}_p{st.session_state.current_page}.png"
+    bg_img_path = os.path.join(IMAGE_SAVE_DIR, bg_img_filename)
+    
+    if not os.path.exists(bg_img_path):
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        pix.save(bg_img_path)
+        
+    # 2. PIL로 열고 .load()를 통해 메모리에 강제 할당 (Lazy Loading 버그 원천 차단)
+    bg_image = Image.open(bg_img_path)
+    bg_image.load() 
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -138,7 +145,7 @@ if uploaded_file is not None:
             if len(current_canvas_objects) > len(page_annotations):
                 new_rect = current_canvas_objects[-1]
                 
-                # Canvas 뷰어 좌표(view_zoom 적용)를 PDF 원본 좌표로 맵핑
+                # 좌표 매핑
                 x0 = new_rect["left"] / view_zoom
                 y0 = new_rect["top"] / view_zoom
                 x1 = (new_rect["left"] + new_rect["width"]) / view_zoom
@@ -171,6 +178,7 @@ if uploaded_file is not None:
             with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
                 if os.path.exists(anno['img_path']):
                     crop_img = Image.open(anno['img_path'])
+                    crop_img.load() # 안전을 위해 추출된 이미지도 메모리 강제 할당
                     st.image(crop_img, use_column_width=True)
                 
                 new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
