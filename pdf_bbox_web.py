@@ -28,10 +28,21 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 유틸리티 함수
+# 2. 페이징 및 유틸리티 함수
 # ==========================================
+def go_prev():
+    if st.session_state.current_page > 0:
+        st.session_state.current_page -= 1
+        st.session_state.selected_box_id = None
+        st.session_state.last_canvas_sig = None
+
+def go_next(total_pages):
+    if st.session_state.current_page < total_pages - 1:
+        st.session_state.current_page += 1
+        st.session_state.selected_box_id = None
+        st.session_state.last_canvas_sig = None
+
 def clean_extracted_text(text):
-    """저자소개 제외 및 텍스트 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
@@ -53,18 +64,11 @@ def get_cached_bg_image(file_bytes, page_idx):
     return img, page.rect.width, page.rect.height
 
 # ==========================================
-# 3. 메인 UI 및 파일 로직
+# 3. 파일 로드 로직
 # ==========================================
-st.title("📄 상호작용 데이터 구축 - Web Editor")
-
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
-# --- [수정] 파일 로드 및 초기화 로직 ---
-target_file_bytes = None
-current_file_name = ""
-
 if uploaded_file is not None:
-    # 새로운 파일이 업로드된 경우 초기화
     if st.session_state.file_name != uploaded_file.name:
         st.session_state.file_bytes = uploaded_file.read()
         st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
@@ -75,7 +79,6 @@ if uploaded_file is not None:
         st.session_state.selected_box_id = None
         st.rerun()
 else:
-    # 업로드된 파일이 없고, 기존에 로드된 파일도 없을 때 sample.pdf 시도
     if not st.session_state.file_bytes:
         sample_path = "sample.pdf"
         if os.path.exists(sample_path):
@@ -84,36 +87,30 @@ else:
             st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
             st.session_state.file_name = "sample.pdf"
 
-# 파일이 로드된 상태에서만 UI 실행
+# ==========================================
+# 4. 메인 에디터 화면
+# ==========================================
 if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
 
+    # 사이드바 페이징 컨트롤
     st.sidebar.markdown("---")
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    if col_nav1.button("◀ 이전"):
-        if st.session_state.current_page > 0:
-            st.session_state.current_page -= 1
-            st.session_state.selected_box_id = None
-            st.rerun()
-    if col_nav2.button("다음 ▶"):
-        if st.session_state.current_page < total_pages - 1:
-            st.session_state.current_page += 1
-            st.session_state.selected_box_id = None
-            st.rerun()
-            
+    col_nav1.button("◀ 이전", on_click=go_prev, use_container_width=True)
+    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,), use_container_width=True)
+    
     st.sidebar.write(f"**현재 파일:** {st.session_state.file_name}")
     st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 이미지 스케일링 설정 (700px 고정)
+    # 좌표 안정화 (700px 고정)
     full_bg, pdf_w, pdf_h = get_cached_bg_image(st.session_state.file_bytes, st.session_state.current_page)
     canvas_w = 700
     canvas_h = int(canvas_w * (pdf_h / pdf_w))
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     
-    # 하이라이트 드로잉
     overlay = Image.new("RGBA", display_img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
     pdf_to_canvas_ratio = canvas_w / pdf_w
@@ -150,7 +147,6 @@ if st.session_state.file_bytes:
                 rect_sig = f"{new_rect['left']}_{new_rect['top']}_{new_rect['width']}"
                 if st.session_state.last_canvas_sig != rect_sig:
                     st.session_state.last_canvas_sig = rect_sig
-                    
                     p_x0, p_y0 = new_rect["left"] / pdf_to_canvas_ratio, new_rect["top"] / pdf_to_canvas_ratio
                     p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / pdf_to_canvas_ratio, (new_rect["top"] + new_rect["height"]) / pdf_to_canvas_ratio
                     
@@ -163,6 +159,7 @@ if st.session_state.file_bytes:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
+                        st.rerun()
                     else: 
                         page = doc.load_page(st.session_state.current_page)
                         fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
@@ -186,10 +183,7 @@ if st.session_state.file_bytes:
                             'text': text, 'img_name': img_name, 'img_path': img_path
                         })
                         st.session_state.selected_box_id = anno_id
-                    
-                    st.session_state.clear_trigger += 1
-                    st.session_state.canvas_state["trigger"] = st.session_state.clear_trigger
-                    st.rerun()
+                        st.rerun()
 
     with right_col:
         st.subheader("데이터 추출 목록")
@@ -200,22 +194,23 @@ if st.session_state.file_bytes:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
+            # 독립 스크롤바 스타일
             st.markdown("""
                 <style>
-                .scroll-list {
+                .list-container {
                     max-height: 220px;
-                    overflow-y: scroll;
+                    overflow-y: auto;
                     border: 2px solid #4A90E2;
                     border-radius: 8px;
                     padding: 10px;
                     background-color: #fcfcfc;
-                    margin-bottom: 10px;
+                    margin-bottom: 15px;
                 }
-                div[data-testid="stRadio"] > div { gap: 4px; }
+                div[data-testid="stRadio"] > div { gap: 2px; }
                 </style>
                 """, unsafe_allow_html=True)
 
-            st.markdown('<div class="scroll-list">', unsafe_allow_html=True)
+            st.markdown('<div class="list-container">', unsafe_allow_html=True)
             def format_label(aid):
                 a = anno_dict[aid]
                 r = a['pdf_rect']
@@ -234,23 +229,24 @@ if st.session_state.file_bytes:
 
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            st.image(curr_anno['img_path'], use_column_width=True)
+            st.image(curr_anno['img_path'], use_container_width=True)
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected"):
+            if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected", use_container_width=True):
                 delete_single_item(curr_anno)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text'], "image": a['img_name']} for a in st.session_state.annotations]
-            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name=f"extracted_{st.session_state.file_name}.json", mime="application/json")
+            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
+                               file_name=f"extracted_{st.session_state.file_name}.json", mime="application/json", use_container_width=True)
         else:
             st.info("왼쪽에서 드래그하여 데이터를 추출하세요.")
 else:
-    st.info("👈 사이드바에서 PDF 파일을 업로드하거나, 실행 경로에 sample.pdf 파일을 넣어주세요.")
+    st.info("👈 사이드바에서 PDF 파일을 업로드하거나 sample.pdf를 준비해 주세요.")
 
 # ==========================================
-# 4. JavaScript 단축키
+# 5. JavaScript 단축키
 # ==========================================
 components.html(
     """
