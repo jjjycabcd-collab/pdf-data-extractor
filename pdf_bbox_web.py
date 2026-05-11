@@ -8,9 +8,9 @@ from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 
 # ==========================================
-# 1. 페이지 및 상태 초기화
+# 1. 페이지 및 상태 초기화 (타이틀 수정)
 # ==========================================
-st.set_page_config(layout="wide", page_title="상호작업 데이터 구축 - Web Editor")
+st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
@@ -48,7 +48,6 @@ def go_next(total_pages):
         st.session_state.last_canvas_sig = None
 
 def delete_single_item(anno_obj):
-    """현재 선택된 항목 하나만 삭제"""
     if anno_obj:
         if os.path.exists(anno_obj['img_path']):
             os.remove(anno_obj['img_path'])
@@ -84,7 +83,7 @@ def save_cropped_image(page, pdf_rect):
 # ==========================================
 # 3. 메인 UI 레이아웃
 # ==========================================
-st.title("📄 상호작업 데이터 구축 - Web Editor")
+st.title("📄 상호작용 데이터 구축 - Web Editor")
 
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -105,7 +104,7 @@ if uploaded_file is not None:
     col_nav1, col_nav2 = st.sidebar.columns(2)
     col_nav1.button("◀ 이전", on_click=go_prev)
     col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,))
-    st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
+    st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
@@ -125,7 +124,7 @@ if uploaded_file is not None:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**[PDF 뷰어] 영역을 추출하세요**")
+        st.write("**[PDF 뷰어] 영역을 드래그하여 추출하세요**")
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -186,26 +185,23 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 5건 기준 고정 스크롤바 UI 강화 ---
+            # --- [수정] 추출 목록 독립 스크롤 영역 구현 ---
             st.markdown("""
                 <style>
-                .list-wrapper {
-                    max-height: 200px; /* 약 5건 높이 */
-                    overflow-y: scroll;
+                .scrollable-list {
+                    max-height: 200px;
+                    overflow-y: auto;
                     border: 2px solid #4A90E2;
-                    border-radius: 10px;
+                    border-radius: 8px;
                     padding: 10px;
-                    background-color: #ffffff;
-                    margin-bottom: 20px;
+                    background-color: #f9f9f9;
+                    margin-bottom: 15px;
                 }
-                /* 라디오 항목 사이 간격 조정 */
-                div[data-testid="stRadio"] > div { gap: 4px; }
+                div[data-testid="stRadio"] > div { gap: 2px; }
                 </style>
                 """, unsafe_allow_html=True)
 
-            # 별도 컨테이너로 감싸서 스크롤바 강제 적용
-            st.markdown('<div class="list-wrapper">', unsafe_allow_html=True)
-            
+            st.markdown('<div class="scrollable-list">', unsafe_allow_html=True)
             def format_label(aid):
                 txt = anno_dict[aid]['text'][:35].replace('\n', ' ')
                 return f"[P{anno_dict[aid]['page_idx']+1}] " + txt + "..."
@@ -228,19 +224,20 @@ if uploaded_file is not None:
             # 추출 이미지
             st.image(curr_anno['img_path'], use_column_width=True)
             
-            # [수정] 텍스트 편집창 높이 축소 (height=180)
+            # [수정] 텍스트 편집창 높이 축소 (180)
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180)
 
             c1, c2 = st.columns(2)
-            if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected", use_column_width=True):
+            # [오류 수정] use_column_width 제거 (st.button에 없는 인자)
+            if c1.button("🗑️ 선택 항목 삭제", key="btn_del_selected"):
                 delete_single_item(curr_anno)
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "text": a['text'], "bbox": a['pdf_rect'], "image": a['img_name']} for a in st.session_state.annotations]
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted.json", mime="application/json", use_column_width=True)
+                               file_name="extracted.json", mime="application/json")
         else:
-            st.info("왼쪽에서 추출 작업을 진행해 주세요.")
+            st.info("왼쪽에서 영역을 드래그하여 작업을 시작하세요.")
 
 # ==========================================
 # 4. JavaScript 단축키
