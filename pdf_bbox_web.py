@@ -28,16 +28,15 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 유틸리티 함수
+# 2. 데이터 정제 유틸리티 (Saved Info 반영)
 # ==========================================
 def clean_extracted_text(text):
-    """저자소개 등 불필요한 라인 제외"""
+    """저자소개 제외 및 참고문헌 위주 정제"""
     lines = text.split('\n')
     cleaned_lines = [line.strip() for line in lines if "저자소개" not in line and line.strip()]
     return "\n".join(cleaned_lines)
 
 def delete_single_item(anno_obj):
-    """현재 선택된 항목 하나만 삭제"""
     if anno_obj:
         if os.path.exists(anno_obj['img_path']):
             os.remove(anno_obj['img_path'])
@@ -46,29 +45,13 @@ def delete_single_item(anno_obj):
         st.session_state.selected_box_id = None
 
 @st.cache_data(show_spinner=False)
-def get_cached_bg_bytes(file_bytes, page_idx):
+def get_cached_bg_image(file_bytes, page_idx):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page = doc.load_page(page_idx)
-    pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-    return pix.tobytes("png")
-
-def get_autofit_rect(page, pdf_rect, autofit_enabled):
-    if not autofit_enabled: return pdf_rect
-    words = page.get_text("words")
-    fitted_rect = None
-    for w in words:
-        w_rect = fitz.Rect(w[:4])
-        if pdf_rect.intersects(w_rect):
-            fitted_rect = w_rect if fitted_rect is None else fitted_rect | w_rect 
-    return fitted_rect if fitted_rect else pdf_rect
-
-def save_cropped_image(page, pdf_rect):
-    st.session_state.crop_counter += 1
-    filename = f"crop_p{st.session_state.current_page+1}_{st.session_state.crop_counter:03d}.png"
-    filepath = os.path.join(IMAGE_SAVE_DIR, filename)
-    pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
-    pix.save(filepath)
-    return filename, filepath
+    # 고해상도 렌더링 (2.0배)
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    return img, page.rect.width, page.rect.height
 
 # ==========================================
 # 3. 메인 UI 레이아웃
@@ -92,38 +75,57 @@ if uploaded_file is not None:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
     
     col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=lambda: (setattr(st.session_state, 'current_page', max(0, st.session_state.current_page - 1)), setattr(st.session_state, 'selected_box_id', None)))
-    col_nav2.button("다음 ▶", on_click=lambda: (setattr(st.session_state, 'current_page', min(total_pages - 1, st.session_state.current_page + 1)), setattr(st.session_state, 'selected_box_id', None)))
+    if col_nav1.button("◀ 이전"):
+        if st.session_state.current_page > 0:
+            st.session_state.current_page -= 1
+            st.session_state.selected_box_id = None
+            st.rerun()
+    if col_nav2.button("다음 ▶"):
+        if st.session_state.current_page < total_pages - 1:
+            st.session_state.current_page += 1
+            st.session_state.selected_box_id = None
+            st.rerun()
+            
     st.sidebar.write(f"**현재 페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
-    bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
-    bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+    # 이미지와 원본 PDF 크기 가져오기
+    full_bg, pdf_w, pdf_h = get_cached_bg_image(st.session_state.file_bytes, st.session_state.current_page)
     
-    overlay = Image.new("RGBA", bg_image.size, (255, 255, 255, 0))
+    # [핵심] 캔버스 표시 너비를 고정하여 리사이징 에러 방지
+    canvas_display_width = 700
+    canvas_display_height = int(canvas_display_width * (pdf_h / pdf_w))
+    
+    # 화면 표시용 스케일된 이미지 생성
+    display_img = full_bg.resize((canvas_display_width, canvas_display_height), Image.LANCZOS).convert("RGBA")
+    
+    # 하이라이트 레이어
+    overlay = Image.new("RGBA", display_img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
-    img_scale = 1.5 
+    
+    # PDF 좌표 -> 캔버스 좌표 변환 비율
+    pdf_to_canvas_ratio = canvas_display_width / pdf_w
 
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
-            x0, y0, x1, y1 = [c * img_scale for c in anno['pdf_rect']]
+            x0, y0, x1, y1 = [c * pdf_to_canvas_ratio for c in anno['pdf_rect']]
             is_sel = (st.session_state.selected_box_id == anno['id'])
             draw.rectangle([x0, y0, x1, y1], outline=(255,0,0,255) if is_sel else (0,0,255,255), width=3 if is_sel else 2)
             draw.rectangle([x0, y0, x1, y1], fill=(255,0,0,40) if is_sel else (0,0,255,20))
 
-    bg_composite = Image.alpha_composite(bg_image, overlay)
+    final_bg = Image.alpha_composite(display_img, overlay)
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**[PDF 뷰어] 영역을 드래그하여 추출하세요**")
+        st.write("**[PDF 뷰어] 영역을 드래그하세요 (화면 크기에 영향받지 않음)**")
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
             stroke_color="rgba(0, 0, 255, 0.8)",
-            background_image=bg_composite,
+            background_image=final_bg,
             initial_drawing=st.session_state.canvas_state,
             update_streamlit=True,
-            height=bg_image.height,
-            width=bg_image.width,
+            height=canvas_display_height,
+            width=canvas_display_width,
             drawing_mode="rect",
             key=f"canvas_p{st.session_state.current_page}",
         )
@@ -135,24 +137,39 @@ if uploaded_file is not None:
                 rect_sig = f"{new_rect['left']}_{new_rect['top']}_{new_rect['width']}"
                 if st.session_state.last_canvas_sig != rect_sig:
                     st.session_state.last_canvas_sig = rect_sig
-                    p_x0, p_y0 = new_rect["left"] / img_scale, new_rect["top"] / img_scale
-                    p_x1, p_y1 = (new_rect["left"] + new_rect["width"]) / img_scale, (new_rect["top"] + new_rect["height"]) / img_scale
                     
-                    if new_rect["width"] < 15: 
+                    # 캔버스 좌표 -> 원본 PDF 좌표 역변환
+                    pdf_x0 = new_rect["left"] / pdf_to_canvas_ratio
+                    pdf_y0 = new_rect["top"] / pdf_to_canvas_ratio
+                    pdf_x1 = (new_rect["left"] + new_rect["width"]) / pdf_to_canvas_ratio
+                    pdf_y1 = (new_rect["top"] + new_rect["height"]) / pdf_to_canvas_ratio
+                    
+                    if new_rect["width"] < 10: # 클릭 선택
                         clicked_id = None
                         for a in reversed(st.session_state.annotations):
                             if a['page_idx'] == st.session_state.current_page:
                                 rx0, ry0, rx1, ry1 = a['pdf_rect']
-                                if rx0 <= p_x0 <= rx1 and ry0 <= p_y0 <= ry1:
+                                if rx0 <= pdf_x0 <= rx1 and ry0 <= pdf_y0 <= ry1:
                                     clicked_id = a['id']
                                     break
                         st.session_state.selected_box_id = clicked_id
-                    else: 
+                    else: # 드래그 추출
                         page = doc.load_page(st.session_state.current_page)
-                        fit_rect = get_autofit_rect(page, fitz.Rect(p_x0, p_y0, p_x1, p_y1), autofit_enabled)
-                        raw_text = page.get_text("text", clip=fit_rect)
-                        text = clean_extracted_text(raw_text)
-                        img_name, img_path = save_cropped_image(page, fit_rect)
+                        fit_rect = fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
+                        if autofit_enabled:
+                            words = page.get_text("words")
+                            matched = [fitz.Rect(w[:4]) for w in words if fitz.Rect(w[:4]).intersects(fit_rect)]
+                            if matched:
+                                fit_rect = matched[0]
+                                for r in matched[1:]: fit_rect |= r
+                        
+                        text = clean_extracted_text(page.get_text("text", clip=fit_rect))
+                        
+                        # 고해상도 이미지 저장용
+                        st.session_state.crop_counter += 1
+                        img_name = f"crop_p{st.session_state.current_page+1}_{st.session_state.crop_counter:03d}.png"
+                        img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
+                        page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(img_path)
                         
                         anno_id = f"id_{st.session_state.crop_counter}"
                         st.session_state.annotations.append({
@@ -175,34 +192,33 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1]
 
-            # --- [수정] 좌표 복원 및 독립 스크롤 영역 설정 ---
+            # --- [수정] 좌표 표시 및 독립 스크롤 영역 ---
             st.markdown("""
                 <style>
-                .scroll-box {
+                .scroll-area {
                     max-height: 220px;
-                    overflow-y: scroll !important;
+                    overflow-y: scroll;
                     border: 2px solid #4A90E2;
                     border-radius: 8px;
                     padding: 10px;
-                    background-color: #ffffff;
+                    background-color: #fcfcfc;
+                    margin-bottom: 10px;
                 }
                 div[data-testid="stRadio"] > div { gap: 4px; }
                 </style>
                 """, unsafe_allow_html=True)
 
-            st.markdown('<div class="scroll-box">', unsafe_allow_html=True)
-            
-            def format_label_with_coords(aid):
+            st.markdown('<div class="scroll-area">', unsafe_allow_html=True)
+            def format_label_detail(aid):
                 a = anno_dict[aid]
-                rect = a['pdf_rect']
-                coords = f"[X:{rect[0]:.0f}, Y:{rect[1]:.0f}, W:{rect[2]-rect[0]:.0f}, H:{rect[3]-rect[1]:.0f}]"
-                txt = a['text'][:25].replace('\n', ' ')
+                r = a['pdf_rect']
+                coords = f"[X:{r[0]:.0f}, Y:{r[1]:.0f}, W:{r[2]-r[0]:.0f}, H:{r[3]-r[1]:.0f}]"
+                txt = a['text'][:20].replace('\n', ' ')
                 return f"[P{a['page_idx']+1}] {coords} | {txt}..."
 
             selected_id = st.radio(
-                "항목 선택", options=valid_ids, format_func=format_label_with_coords,
-                index=valid_ids.index(st.session_state.selected_box_id), 
-                label_visibility="collapsed"
+                "항목 선택", options=valid_ids, format_func=format_label_detail,
+                index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed"
             )
             st.markdown('</div>', unsafe_allow_html=True)
             
@@ -213,11 +229,9 @@ if uploaded_file is not None:
 
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            
-            # 추출 이미지
             st.image(curr_anno['img_path'], use_column_width=True)
             
-            # [수정] 텍스트 편집창 높이 축소 (180)
+            # [수정] 텍스트 편집창 높이 축소
             curr_anno['text'] = st.text_area("📝 텍스트 편집", value=curr_anno['text'], height=180)
 
             c1, c2 = st.columns(2)
@@ -226,10 +240,9 @@ if uploaded_file is not None:
                 st.rerun()
             
             export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text'], "image": a['img_name']} for a in st.session_state.annotations]
-            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
-                               file_name="extracted.json", mime="application/json")
+            c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="extracted.json", mime="application/json")
         else:
-            st.info("왼쪽에서 추출 작업을 진행해 주세요.")
+            st.info("왼쪽에서 드래그하여 데이터를 추출하세요.")
 
 # ==========================================
 # 4. JavaScript 단축키
