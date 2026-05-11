@@ -24,8 +24,12 @@ if 'crop_counter' not in st.session_state:
 
 if 'selected_box_id' not in st.session_state:
     st.session_state.selected_box_id = None
-if 'canvas_key_counter' not in st.session_state:
-    st.session_state.canvas_key_counter = 0
+
+# ★ 깜빡임 없는 캔버스 지우개(Eraser) 상태 변수 ★
+if 'clear_trigger' not in st.session_state:
+    st.session_state.clear_trigger = 0
+if 'canvas_state' not in st.session_state:
+    st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": 0}
 
 IMAGE_SAVE_DIR = "extracted_images"
 if not os.path.exists(IMAGE_SAVE_DIR):
@@ -42,6 +46,13 @@ def go_prev():
 def go_next(total_pages):
     if st.session_state.current_page < total_pages - 1:
         st.session_state.current_page += 1
+        st.session_state.selected_box_id = None
+
+def delete_box(idx, img_path, is_selected):
+    if os.path.exists(img_path):
+        os.remove(img_path)
+    st.session_state.annotations.pop(idx)
+    if is_selected:
         st.session_state.selected_box_id = None
 
 # ==========================================
@@ -122,6 +133,9 @@ if uploaded_file is not None:
     col2.button("다음 ▶", on_click=go_next, args=(total_pages,))
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
+    # ==========================================
+    # PDF 배경 위에 박스 레이어 합성
+    # ==========================================
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     view_zoom = 1.0 
@@ -146,18 +160,21 @@ if uploaded_file is not None:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**PDF 뷰어 (클릭: 선택 / 드래그: 영역 추출)**")
+        st.write("**PDF 뷰어 (클릭: 박스 선택 / 드래그: 새로운 영역 추출)**")
         
+        # ★ key는 페이지당 1개로 고정하여 깜빡임(Remount) 완벽 제거
+        # ★ initial_drawing을 통해 점(Dot)을 무반동으로 지움
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
             stroke_color="rgba(0, 0, 255, 0.8)",
             background_image=bg_image,
+            initial_drawing=st.session_state.canvas_state,
             update_streamlit=True,
             height=int(bg_image.height),
             width=int(bg_image.width),
             drawing_mode="rect",
-            key=f"canvas_{st.session_state.current_page}_{st.session_state.canvas_key_counter}",
+            key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}",
         )
 
         if canvas_result.json_data is not None:
@@ -168,13 +185,13 @@ if uploaded_file is not None:
                 new_rect = current_canvas_objects[-1]
                 w, h = new_rect["width"], new_rect["height"]
                 
-                # ★ 클릭 vs 드래그 판별 마법 (가로/세로가 15px 이하의 미세한 상자면 클릭으로 간주)
+                # ★ 클릭 vs 드래그 판별 (가로/세로 15px 이하면 클릭)
                 if max(w, h) < 15:
                     click_x = (new_rect["left"] + w/2) / view_zoom
                     click_y = (new_rect["top"] + h/2) / view_zoom
                     
                     clicked_id = None
-                    # 나중에 그려진(위쪽에 있는) 박스부터 역순으로 클릭 충돌 체크
+                    # 나중에 그린 박스(위쪽 레이어)부터 클릭 검사
                     for anno in reversed(st.session_state.annotations):
                         if anno['page_idx'] == st.session_state.current_page:
                             x0, y0, x1, y1 = anno['pdf_rect']
@@ -182,15 +199,15 @@ if uploaded_file is not None:
                                 clicked_id = anno['id']
                                 break
                     
-                    if clicked_id:
-                        st.session_state.selected_box_id = clicked_id
+                    st.session_state.selected_box_id = clicked_id
                     
-                    # 미세한 점(잔상)을 지우기 위해 캔버스 초기화
-                    st.session_state.canvas_key_counter += 1
+                    # 지우개 트리거 발동 (점 삭제)
+                    st.session_state.clear_trigger += 1
+                    st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
                     st.rerun()
                 
                 else:
-                    # 정상적인 드래그(영역 추출) 로직
+                    # 정상 드래그 시 데이터 추출
                     page = doc.load_page(st.session_state.current_page)
                     x0 = new_rect["left"] / view_zoom
                     y0 = new_rect["top"] / view_zoom
@@ -213,9 +230,11 @@ if uploaded_file is not None:
                         'img_path': img_path
                     }
                     st.session_state.annotations.append(new_anno)
-                    
                     st.session_state.selected_box_id = anno_id
-                    st.session_state.canvas_key_counter += 1
+                    
+                    # 지우개 트리거 발동 (그린 박스를 배경에 굽고 캔버스에서 지움)
+                    st.session_state.clear_trigger += 1
+                    st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
                     st.rerun() 
 
     with right_col:
@@ -228,12 +247,12 @@ if uploaded_file is not None:
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1] if valid_ids else None
 
-            # ★ 목록에 좌표 정보([X, Y, W, H]) 추가 반영
+            # 목록에 좌표 정보 표시
             def format_list_item(anno_id):
                 anno = anno_dict[anno_id]
-                preview = anno['text'][:15].replace('\n', ' ') + ("..." if len(anno['text']) > 15 else "")
+                preview = anno['text'][:20].replace('\n', ' ') + ("..." if len(anno['text']) > 20 else "")
                 rect = anno['pdf_rect']
-                coords = f"[X:{rect[0]:.1f}, Y:{rect[1]:.1f}, W:{rect[2]-rect[0]:.1f}, H:{rect[3]-rect[1]:.1f}]"
+                coords = f"[X:{rect[0]:.0f}, Y:{rect[1]:.0f}, W:{rect[2]-rect[0]:.0f}, H:{rect[3]-rect[1]:.0f}]"
                 return f"[P{anno['page_idx'] + 1}] {coords} | {preview}"
 
             selected_id = st.radio(
@@ -244,6 +263,7 @@ if uploaded_file is not None:
                 label_visibility="collapsed"
             )
 
+            # 리스트 클릭 시 PDF 자동 연동
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
                 target_page = anno_dict[selected_id]['page_idx']
@@ -254,12 +274,7 @@ if uploaded_file is not None:
             selected_anno = anno_dict[st.session_state.selected_box_id]
 
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🗑️ 선택 항목 삭제", use_container_width=True):
-                if os.path.exists(selected_anno['img_path']):
-                    os.remove(selected_anno['img_path'])
-                st.session_state.annotations = [a for a in st.session_state.annotations if a['id'] != st.session_state.selected_box_id]
-                st.session_state.selected_box_id = None
-                st.rerun()
+            st.button("🗑️ 선택 항목 삭제", use_container_width=True, on_click=delete_box, args=(st.session_state.annotations.index(selected_anno), selected_anno['img_path'], True))
 
             st.markdown("---")
             st.write("**🔍 선택 항목 상세 편집기**")
