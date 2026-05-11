@@ -2,7 +2,8 @@ import streamlit as st
 import fitz  # PyMuPDF
 import json
 import os
-from PIL import Image
+import io
+from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 
 # ==========================================
@@ -10,6 +11,8 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="SI 데이터 구축 엔진 - Web")
 
+if 'file_bytes' not in st.session_state:
+    st.session_state.file_bytes = None
 if 'pdf_doc' not in st.session_state:
     st.session_state.pdf_doc = None
 if 'current_page' not in st.session_state:
@@ -19,13 +22,27 @@ if 'annotations' not in st.session_state:
 if 'crop_counter' not in st.session_state:
     st.session_state.crop_counter = 0
 
+# ★ 연동을 위한 상태 변수 추가 ★
+if 'selected_box_id' not in st.session_state:
+    st.session_state.selected_box_id = None
+if 'canvas_key_counter' not in st.session_state:
+    st.session_state.canvas_key_counter = 0
+
 IMAGE_SAVE_DIR = "extracted_images"
 if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 핵심 로직 함수
+# 2. 핵심 로직 & 캐싱
 # ==========================================
+@st.cache_data(show_spinner=False)
+def get_cached_bg_bytes(file_bytes, page_idx):
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page = doc.load_page(page_idx)
+    mat = fitz.Matrix(1.0, 1.0)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    return pix.tobytes("png")
+
 def get_autofit_rect(page, pdf_rect, autofit_enabled):
     if not autofit_enabled: 
         return pdf_rect
@@ -72,12 +89,14 @@ st.title("📄 SI 데이터 구축 엔진 - Web Editor")
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
 if uploaded_file is not None:
-    if st.session_state.pdf_doc is None or st.session_state.get('file_name') != uploaded_file.name:
+    if st.session_state.get('file_name') != uploaded_file.name:
         file_bytes = uploaded_file.read()
+        st.session_state.file_bytes = file_bytes
         st.session_state.pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         st.session_state.current_page = 0
         st.session_state.annotations = []
         st.session_state.crop_counter = 0
+        st.session_state.selected_box_id = None
         st.session_state.file_name = uploaded_file.name
 
     doc = st.session_state.pdf_doc
@@ -89,51 +108,65 @@ if uploaded_file is not None:
     col1, col2 = st.sidebar.columns(2)
     if col1.button("◀ 이전") and st.session_state.current_page > 0:
         st.session_state.current_page -= 1
+        st.session_state.selected_box_id = None
         st.rerun()
     if col2.button("다음 ▶") and st.session_state.current_page < total_pages - 1:
         st.session_state.current_page += 1
+        st.session_state.selected_box_id = None
         st.rerun()
     
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
-    # ★ 하얀 캔버스 원천 차단: RGBA 변환 및 정수 규격화 ★
+    # ★ 기존 박스들을 배경 이미지에 직접 렌더링 (하이라이트 포함) ★
     # ==========================================
-    page = doc.load_page(st.session_state.current_page)
+    bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
+    bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     view_zoom = 1.0 
-    mat = fitz.Matrix(view_zoom, view_zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
     
-    # 캔버스가 절대 거부하지 못하도록 완벽한 RGBA 포맷으로 강제 변환
-    bg_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
+    # PIL을 사용하여 배경 이미지 위에 박스들을 물리적으로 그립니다.
+    draw = ImageDraw.Draw(bg_image, "RGBA")
+    for anno in st.session_state.annotations:
+        if anno['page_idx'] == st.session_state.current_page:
+            x0, y0, x1, y1 = anno['pdf_rect']
+            zx0, zy0, zx1, zy1 = x0 * view_zoom, y0 * view_zoom, x1 * view_zoom, y1 * view_zoom
+            
+            # 선택된 박스는 빨간색, 나머지는 파란색으로 렌더링
+            if st.session_state.selected_box_id == anno['id']:
+                draw.rectangle([zx0, zy0, zx1, zy1], outline=(255, 0, 0, 255), width=4)
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(255, 0, 0, 40))
+            else:
+                draw.rectangle([zx0, zy0, zx1, zy1], outline=(0, 0, 255, 255), width=2)
+                draw.rectangle([zx0, zy0, zx1, zy1], fill=(0, 0, 255, 20))
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**PDF 뷰어 (드래그하여 영역 추출)**")
+        st.write("**PDF 뷰어 (새로운 영역 드래그 추출)**")
         
+        # 캔버스는 오직 "새로운 영역을 그릴 때"만 사용됩니다.
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
             stroke_color="rgba(0, 0, 255, 0.8)",
             background_image=bg_image,
             update_streamlit=True,
-            # 에러 방지를 위해 사이즈를 명확한 정수(int)로 강제 고정
             height=int(bg_image.height),
             width=int(bg_image.width),
             drawing_mode="rect",
-            # 버그 유발 특수문자 제거된 안전한 키값
-            key=f"canvas_page_{st.session_state.current_page}",
+            # 키값이 바뀔 때마다 캔버스 찌꺼기 초기화
+            key=f"canvas_{st.session_state.current_page}_{st.session_state.canvas_key_counter}",
         )
 
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
             current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
-            page_annotations = [a for a in st.session_state.annotations if a['page_idx'] == st.session_state.current_page]
             
-            if len(current_canvas_objects) > len(page_annotations):
+            # 캔버스에 새로 그려진 도형이 있다면 처리
+            if len(current_canvas_objects) > 0:
                 new_rect = current_canvas_objects[-1]
+                page = doc.load_page(st.session_state.current_page)
                 
                 x0 = new_rect["left"] / view_zoom
                 y0 = new_rect["top"] / view_zoom
@@ -146,8 +179,9 @@ if uploaded_file is not None:
                 text = get_sorted_text(page, fitted_pdf_rect)
                 img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
                 
+                anno_id = f"p{st.session_state.current_page}_{img_name}"
                 new_anno = {
-                    'id': f"p{st.session_state.current_page}_{img_name}",
+                    'id': anno_id,
                     'page_idx': st.session_state.current_page,
                     'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
                     'text': text,
@@ -155,6 +189,10 @@ if uploaded_file is not None:
                     'img_path': img_path
                 }
                 st.session_state.annotations.append(new_anno)
+                
+                # 방금 그린 박스를 하이라이트 상태로 만들고 캔버스 리셋
+                st.session_state.selected_box_id = anno_id
+                st.session_state.canvas_key_counter += 1
                 st.rerun() 
 
     with right_col:
@@ -164,7 +202,17 @@ if uploaded_file is not None:
             st.info("왼쪽 뷰어에서 드래그하여 데이터를 추출해보세요.")
         
         for idx, anno in enumerate(st.session_state.annotations):
-            with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
+            # 배경색상을 다르게 하여 현재 선택된 아코디언을 시각적으로 구분 (가상 느낌 부여)
+            is_selected = (st.session_state.selected_box_id == anno['id'])
+            expander_title = f"🌟 Page {anno['page_idx'] + 1} - {anno['img_name']}" if is_selected else f"Page {anno['page_idx'] + 1} - {anno['img_name']}"
+            
+            with st.expander(expander_title, expanded=is_selected):
+                
+                # ★ 연동 버튼 추가 ★
+                if st.button("🎯 왼쪽 캔버스에서 이 영역 위치 확인", key=f"focus_{idx}"):
+                    st.session_state.selected_box_id = anno['id']
+                    st.rerun()
+                
                 if os.path.exists(anno['img_path']):
                     st.image(anno['img_path'], use_column_width=True)
                 
@@ -176,6 +224,9 @@ if uploaded_file is not None:
                     if os.path.exists(anno['img_path']):
                         os.remove(anno['img_path'])
                     st.session_state.annotations.pop(idx)
+                    # 삭제한 항목이 현재 하이라이트 상태였다면 초기화
+                    if is_selected:
+                        st.session_state.selected_box_id = None
                     st.rerun()
 
         st.markdown("---")
