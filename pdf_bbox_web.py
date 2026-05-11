@@ -30,6 +30,7 @@ if not os.path.exists(IMAGE_SAVE_DIR):
 # 2. 유틸리티 함수
 # ==========================================
 def clean_text(text):
+    if not text: return ""
     lines = text.split('\n')
     return "\n".join([line.strip() for line in lines if "저자소개" not in line and line.strip()])
 
@@ -96,14 +97,14 @@ if st.session_state.file_bytes:
     st.sidebar.write(f"**파일:** {st.session_state.file_name}")
     st.sidebar.write(f"**페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 캔버스 크기 및 스케일 설정
+    # 캔버스 크기 및 좌표 비율 설정
     full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
     canvas_w = 700
     canvas_h = int(canvas_w * (pdf_h / pdf_w))
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
-    # Fabric.js 객체 생성 (기존 태그들)
+    # Fabric.js 객체 렌더링
     fabric_objects = []
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -127,16 +128,16 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        # 모드 안내 및 선택 해제 버튼 (상단에 작고 깔끔하게 배치)
-        header_col1, header_col2 = st.columns([7, 3])
-        with header_col1:
-            status_txt = "🔧 영역 수정 모드 (박스 핸들을 드래그하세요)" if tag_mode=="transform" else "🖋️ 새 영역 태깅 모드 (드래그하여 박스를 그리세요)"
-            st.write(f"**{status_txt}**")
-        with header_col2:
-            if tag_mode == "transform":
-                if st.button("🔄 새 영역 그리기"):
-                    st.session_state.selected_box_id = None
-                    st.rerun()
+        # 상태 안내 메시지
+        status_txt = "🔧 수정 모드 (조정 완료 시 자동 복귀 / 강제 취소: ESC키)" if tag_mode=="transform" else "🖋️ 신규 태깅 모드 (기존 박스 안을 클릭하면 수정 가능)"
+        st.write(f"**[상태] {status_txt}**")
+
+        # JS 연동을 위한 숨겨진 리셋 버튼 (ESC 키 작동용)
+        st.markdown("<div style='display:none'>", unsafe_allow_html=True)
+        if st.button("모드초기화", key="btn_hidden_reset"):
+            st.session_state.selected_box_id = None
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -152,24 +153,36 @@ if st.session_state.file_bytes:
             key=f"canvas_p{st.session_state.current_page}_m{tag_mode}",
         )
 
-        # 캔버스 상호작용 로직
-        if canvas_result.json_data:
+        # ----------------------------------------------------
+        # 핵심 로직: 모드 자동 전환 및 좌표 업데이트
+        # ----------------------------------------------------
+        if canvas_result.json_data and "objects" in canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             
             if tag_mode == "transform":
-                # [편집 모드] 조정된 좌표를 실시간 업데이트
+                # [수정 모드] 박스 크기 변경 시 데이터 업데이트 후 '자동으로 신규 모드 복귀'
+                modified = False
                 for obj in objs:
                     if "id" in obj:
                         for anno in st.session_state.annotations:
                             if anno['id'] == obj['id']:
-                                # scaleX, scaleY 속성을 반영하여 정확한 크기 계산
-                                new_x0 = obj['left'] / pdf_to_canvas_ratio
-                                new_y0 = obj['top'] / pdf_to_canvas_ratio
-                                new_x1 = new_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                                new_y1 = new_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-                                anno['pdf_rect'] = [new_x0, new_y0, new_x1, new_y1]
+                                old_r = anno['pdf_rect']
+                                n_x0 = obj['left'] / pdf_to_canvas_ratio
+                                n_y0 = obj['top'] / pdf_to_canvas_ratio
+                                n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                                n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+
+                                # 위치나 크기가 실제로 변했는지 확인
+                                if abs(n_x0 - old_r[0]) > 1 or abs(n_y0 - old_r[1]) > 1 or abs(n_x1 - old_r[2]) > 1 or abs(n_y1 - old_r[3]) > 1:
+                                    anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                                    modified = True
+
+                if modified:
+                    st.session_state.selected_box_id = None # 조정을 마쳤으므로 신규 태깅 모드로 자동 복귀!
+                    st.rerun()
+
             else:
-                # [그리기 모드] 새 박스 생성 또는 기존 박스 클릭 선택
+                # [신규 모드] 드래그 추출 OR 기존 박스 클릭 인식
                 if objs:
                     last_obj = objs[-1]
                     rect_sig = f"{last_obj['left']}_{last_obj['width']}_{len(objs)}"
@@ -181,7 +194,8 @@ if st.session_state.file_bytes:
                         p_x1 = p_x0 + (last_obj["width"] / pdf_to_canvas_ratio)
                         p_y1 = p_y0 + (last_obj["height"] / pdf_to_canvas_ratio)
                         
-                        if last_obj["width"] < 10: # 클릭을 감지 (너비가 아주 작을 때)
+                        # (1) 살짝 클릭했을 경우 (너비가 10 이하일 때)
+                        if last_obj["width"] < 10 and last_obj["height"] < 10:
                             clicked_id = None
                             for a in reversed(st.session_state.annotations):
                                 if a['page_idx'] == st.session_state.current_page:
@@ -189,13 +203,17 @@ if st.session_state.file_bytes:
                                     if rx0 <= p_x0 <= rx1 and ry0 <= p_y0 <= ry1:
                                         clicked_id = a['id']
                                         break
-                            st.session_state.selected_box_id = clicked_id
-                            st.rerun()
-                        else: # 실제 드래그 시 데이터 추출
+                            
+                            # 기존 박스를 클릭했다면 해당 박스 선택 후 수정 모드로 진입
+                            if clicked_id:
+                                st.session_state.selected_box_id = clicked_id
+                                st.rerun()
+                        
+                        # (2) 넓게 드래그했을 경우 -> 신규 박스 추출 수행
+                        elif last_obj["width"] > 10: 
                             page = doc.load_page(st.session_state.current_page)
                             fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
                             
-                            # 오토피팅
                             if autofit_enabled:
                                 words = page.get_text("words")
                                 matched = [fitz.Rect(w[:4]) for w in words if fitz.Rect(w[:4]).intersects(fit_rect)]
@@ -237,8 +255,8 @@ if st.session_state.file_bytes:
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
                 return "[P" + str(a['page_idx']+1) + "] " + coords + " | " + a['text'][:20].replace('\n', ' ') + "..."
 
-            selected_id = st.radio("선택", options=valid_ids, format_func=format_label,
-                                   index=valid_ids.index(st.session_state.selected_box_id), label_visibility="collapsed")
+            idx = valid_ids.index(st.session_state.selected_box_id) if st.session_state.selected_box_id in valid_ids else 0
+            selected_id = st.radio("선택", options=valid_ids, format_func=format_label, index=idx, label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
             
             if selected_id != st.session_state.selected_box_id:
@@ -248,11 +266,12 @@ if st.session_state.file_bytes:
 
             st.markdown("---")
             curr_anno = anno_dict[st.session_state.selected_box_id]
-            st.image(curr_anno['img_path'], use_column_width=True) # 에러 방지를 위해 use_column_width 고정
+            
+            # [에러 방지] 구버전 Streamlit 호환을 위해 use_column_width=True 고정 사용
+            st.image(curr_anno['img_path'], use_column_width=True)
             curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
             c1, c2 = st.columns(2)
-            # 버튼류에서 use_container_width를 제거하여 모든 Streamlit 버전에서 에러 없이 동작하도록 수정
             if c1.button("🗑️ 삭제", type="primary"):
                 delete_single_item(curr_anno)
                 st.rerun()
@@ -261,9 +280,34 @@ if st.session_state.file_bytes:
             c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                file_name="result.json", mime="application/json")
         else:
-            st.info("영역을 드래그하여 태깅을 시작하세요.")
+            st.info("왼쪽 뷰어에서 드래그하여 태깅을 시작하세요.")
 
 # ==========================================
-# 5. JavaScript 단축키
+# 5. JavaScript 단축키 연동 (ESC 키 추가)
 # ==========================================
-components.html("""<script>const doc = window.parent.document; doc.addEventListener('keydown', function(e) { if (e.key === 'ArrowLeft') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('이전')); if (btn) btn.click(); } else if (e.key === 'ArrowRight') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음')); if (btn) btn.click(); } else if (e.key === 'Delete' || e.key === 'Backspace') { if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') { const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제')); if (btn) btn.click(); } } });</script>""", height=0)
+components.html(
+    """
+    <script>
+    const doc = window.parent.document;
+    doc.addEventListener('keydown', function(e) {
+        if (e.key === 'ArrowLeft') {
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('이전'));
+            if (btn) btn.click();
+        } else if (e.key === 'ArrowRight') {
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('다음'));
+            if (btn) btn.click();
+        } else if (e.key === 'Escape') {
+            // ESC 누르면 숨겨진 모드 초기화 버튼 클릭 -> 신규 태깅 모드로 복귀
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '모드초기화');
+            if (btn) btn.click();
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+                const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
+                if (btn) btn.click();
+            }
+        }
+    });
+    </script>
+    """,
+    height=0,
+)
