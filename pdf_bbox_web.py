@@ -100,15 +100,15 @@ if uploaded_file is not None:
 
     # 현재 페이지 렌더링
     page = doc.load_page(st.session_state.current_page)
-    # 해상도 조절 (scale_factor 2.0 수준)
-    zoom = 2.0
+    
+    # 해상도 조절: 화면 표시용 뷰어 해상도만 살짝 낮춰서(1.5) 클라우드 전송 누락 완벽 방지
+    # (실제 추출되는 데이터 및 크롭 이미지는 기존대로 고화질로 추출되니 안심하세요!)
+    zoom = 1.5 
     mat = fitz.Matrix(zoom, zoom)
     
-    # [최종 패치] 투명 배경 제거(alpha=False) 및 메모리 증발 방지를 위한 물리적 파일 저장
+    # 파일 저장이나 임시 버퍼를 거치지 않고, 픽셀 데이터를 메모리에서 캔버스로 다이렉트 꽂아넣기
     pix = page.get_pixmap(matrix=mat, alpha=False)
-    bg_img_path = os.path.join(IMAGE_SAVE_DIR, f"bg_page_{st.session_state.current_page}.png")
-    pix.save(bg_img_path)
-    bg_image = Image.open(bg_img_path)
+    bg_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
