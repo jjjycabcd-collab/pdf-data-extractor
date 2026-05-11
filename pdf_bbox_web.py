@@ -2,6 +2,7 @@ import streamlit as st
 import fitz  # PyMuPDF
 import json
 import os
+import io
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -19,7 +20,7 @@ if 'annotations' not in st.session_state:
 if 'crop_counter' not in st.session_state:
     st.session_state.crop_counter = 0
 
-# 이미지 임시 저장 경로 (Streamlit Cloud의 휘발성 파일 시스템 사용)
+# 이미지 임시 저장 경로
 IMAGE_SAVE_DIR = "extracted_images"
 if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
@@ -61,6 +62,7 @@ def save_cropped_image(page, pdf_rect):
     page_num = st.session_state.current_page + 1
     filename = f"crop_p{page_num}_{st.session_state.crop_counter:03d}.png"
     filepath = os.path.join(IMAGE_SAVE_DIR, filename)
+    # 데이터 저장용은 고해상도(3.0) 유지
     pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), clip=pdf_rect)
     pix.save(filepath)
     return filename, filepath
@@ -74,12 +76,14 @@ st.title("📄 SI 데이터 구축 엔진 - Web Editor")
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
 if uploaded_file is not None:
-    # PDF 로드
-    if st.session_state.pdf_doc is None:
+    # 새 파일 업로드 감지 및 초기화
+    if st.session_state.pdf_doc is None or st.session_state.get('file_name') != uploaded_file.name:
         pdf_bytes = uploaded_file.read()
         st.session_state.pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         st.session_state.current_page = 0
         st.session_state.annotations = []
+        st.session_state.file_name = uploaded_file.name
+        st.session_state.last_page = -1 # 배경 이미지 강제 갱신용 플래그
 
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
@@ -98,24 +102,38 @@ if uploaded_file is not None:
     
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 현재 페이지 렌더링
-    page = doc.load_page(st.session_state.current_page)
-    
-    # 해상도 조절: 화면 표시용 뷰어 해상도만 살짝 낮춰서(1.5) 클라우드 전송 누락 완벽 방지
-    # (실제 추출되는 데이터 및 크롭 이미지는 기존대로 고화질로 추출되니 안심하세요!)
-    zoom = 1.5 
-    mat = fitz.Matrix(zoom, zoom)
-    
-    # 파일 저장이나 임시 버퍼를 거치지 않고, 픽셀 데이터를 메모리에서 캔버스로 다이렉트 꽂아넣기
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    bg_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    # ==========================================
+    # ★ 핵심 수정: 캔버스 배경 이미지 캐싱 처리 ★
+    # ==========================================
+    # 페이지가 바뀌었을 때만 한 번 이미지를 생성해서 메모리(Session State)에 고정시킵니다.
+    if st.session_state.get('last_page') != st.session_state.current_page:
+        page = doc.load_page(st.session_state.current_page)
+        
+        # 브라우저가 버틸 수 있도록 표시용 줌은 1.2로 설정
+        view_zoom = 1.2 
+        mat = fitz.Matrix(view_zoom, view_zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        
+        # 무거운 픽셀을 가벼운 JPEG로 메모리 상에서 변환 (하얀 캔버스 완벽 방지)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='JPEG', quality=85)
+        img_byte_arr.seek(0)
+        
+        st.session_state.bg_image = Image.open(img_byte_arr)
+        st.session_state.view_zoom = view_zoom
+        st.session_state.last_page = st.session_state.current_page
+
+    # 캐싱된 이미지와 줌 배율 가져오기
+    bg_image = st.session_state.bg_image
+    zoom = st.session_state.view_zoom
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
         st.write("**PDF 뷰어 (드래그하여 영역 추출)**")
-        # Canvas를 이용한 Bounding Box 그리기
+        # Canvas 위젯 (이제 드래그해도 이미지가 다시 로딩되지 않고 딱 붙어있습니다)
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -128,19 +146,17 @@ if uploaded_file is not None:
             key=f"canvas_{st.session_state.current_page}",
         )
 
-        # 캔버스에 그려진 객체 처리
+        # 캔버스 객체 처리 로직
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
-            
-            # 캔버스에 새로 그려진 박스가 세션 상태보다 많으면 추출 로직 실행
             current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
             page_annotations = [a for a in st.session_state.annotations if a['page_idx'] == st.session_state.current_page]
             
             if len(current_canvas_objects) > len(page_annotations):
-                # 가장 마지막에 그려진 박스 가져오기
                 new_rect = current_canvas_objects[-1]
+                page = doc.load_page(st.session_state.current_page)
                 
-                # Canvas 좌표를 원본 PDF 좌표로 변환 (zoom 역연산)
+                # Canvas 뷰어 좌표를 PDF 원본 좌표로 완벽하게 맵핑
                 x0 = new_rect["left"] / zoom
                 y0 = new_rect["top"] / zoom
                 x1 = (new_rect["left"] + new_rect["width"]) / zoom
@@ -161,7 +177,7 @@ if uploaded_file is not None:
                     'img_path': img_path
                 }
                 st.session_state.annotations.append(new_anno)
-                st.rerun() # UI 업데이트를 위해 리런
+                st.rerun() 
 
     with right_col:
         st.write("**🔍 추출 목록 및 텍스트 편집기**")
@@ -171,9 +187,8 @@ if uploaded_file is not None:
         
         for idx, anno in enumerate(st.session_state.annotations):
             with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
-                # 크롭된 이미지 보여주기
+                # 크롭 이미지 렌더링
                 if os.path.exists(anno['img_path']):
-                    # [최종 패치] 경로 직접 참조 대신 PIL Image 로드 및 use_column_width 사용
                     crop_img = Image.open(anno['img_path'])
                     st.image(crop_img, use_column_width=True)
                 
