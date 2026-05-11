@@ -172,82 +172,81 @@ if uploaded_file is not None:
 
         bg_image = Image.alpha_composite(bg_image, overlay)
 
-        # 좌측 캔버스를 스크롤 가능한 컨테이너로 감싸기
-        with st.container(height=800, border=True):
-            canvas_result = st_canvas(
-                fill_color="rgba(0, 0, 255, 0.1)",
-                stroke_width=2,
-                stroke_color="rgba(0, 0, 255, 0.8)",
-                background_image=bg_image,
-                initial_drawing=st.session_state.canvas_state,
-                update_streamlit=True,
-                height=int(bg_image.height),
-                width=int(bg_image.width),
-                drawing_mode="rect",
-                key=f"canvas_p{st.session_state.current_page}_z{zoom}",
-            )
+        # 오류를 일으켰던 강제 컨테이너(height, border)를 제거하고 브라우저 자연 스크롤 활용
+        canvas_result = st_canvas(
+            fill_color="rgba(0, 0, 255, 0.1)",
+            stroke_width=2,
+            stroke_color="rgba(0, 0, 255, 0.8)",
+            background_image=bg_image,
+            initial_drawing=st.session_state.canvas_state,
+            update_streamlit=True,
+            height=int(bg_image.height),
+            width=int(bg_image.width),
+            drawing_mode="rect",
+            key=f"canvas_p{st.session_state.current_page}_z{zoom}",
+        )
 
-            if canvas_result.json_data is not None:
-                objects = canvas_result.json_data["objects"]
-                current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
+        if canvas_result.json_data is not None:
+            objects = canvas_result.json_data["objects"]
+            current_canvas_objects = [obj for obj in objects if obj["type"] == "rect"]
+            
+            if len(current_canvas_objects) > 0:
+                new_rect = current_canvas_objects[-1]
+                w, h = new_rect["width"], new_rect["height"]
+                rect_sig = f"{new_rect['left']:.2f}_{new_rect['top']:.2f}_{w:.2f}_{h:.2f}"
                 
-                if len(current_canvas_objects) > 0:
-                    new_rect = current_canvas_objects[-1]
-                    w, h = new_rect["width"], new_rect["height"]
-                    rect_sig = f"{new_rect['left']:.2f}_{new_rect['top']:.2f}_{w:.2f}_{h:.2f}"
+                if st.session_state.get('last_canvas_sig') != rect_sig:
+                    st.session_state.last_canvas_sig = rect_sig
                     
-                    if st.session_state.get('last_canvas_sig') != rect_sig:
-                        st.session_state.last_canvas_sig = rect_sig
+                    if max(w, h) < 15:
+                        # [클릭 이벤트] 기존 박스 선택
+                        click_x = (new_rect["left"] + w/2) / zoom
+                        click_y = (new_rect["top"] + h/2) / zoom
                         
-                        if max(w, h) < 15:
-                            # [클릭 이벤트] 기존 박스 선택
-                            click_x = (new_rect["left"] + w/2) / zoom
-                            click_y = (new_rect["top"] + h/2) / zoom
-                            
-                            clicked_id = None
-                            for anno in reversed(st.session_state.annotations):
-                                if anno['page_idx'] == st.session_state.current_page:
-                                    x0, y0, x1, y1 = anno['pdf_rect']
-                                    if x0 <= click_x <= x1 and y0 <= click_y <= y1:
-                                        clicked_id = anno['id']
-                                        break
-                            
-                            st.session_state.selected_box_id = clicked_id
-                            st.session_state.clear_trigger += 1
-                            st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
-                            st.rerun()
+                        clicked_id = None
+                        for anno in reversed(st.session_state.annotations):
+                            if anno['page_idx'] == st.session_state.current_page:
+                                x0, y0, x1, y1 = anno['pdf_rect']
+                                if x0 <= click_x <= x1 and y0 <= click_y <= y1:
+                                    clicked_id = anno['id']
+                                    break
                         
-                        else:
-                            # [드래그 이벤트] 새로운 박스 추출 (오토피팅 적용)
-                            page = doc.load_page(st.session_state.current_page)
-                            x0 = new_rect["left"] / zoom
-                            y0 = new_rect["top"] / zoom
-                            x1 = (new_rect["left"] + new_rect["width"]) / zoom
-                            y1 = (new_rect["top"] + new_rect["height"]) / zoom
-                            
-                            user_pdf_rect = fitz.Rect(x0, y0, x1, y1)
-                            fitted_pdf_rect = get_autofit_rect(page, user_pdf_rect, autofit_enabled)
-                            
-                            text = get_sorted_text(page, fitted_pdf_rect)
-                            img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
-                            
-                            anno_id = f"p{st.session_state.current_page}_{img_name}"
-                            new_anno = {
-                                'id': anno_id,
-                                'page_idx': st.session_state.current_page,
-                                'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
-                                'text': text,
-                                'img_name': img_name,
-                                'img_path': img_path
-                            }
-                            st.session_state.annotations.append(new_anno)
-                            st.session_state.selected_box_id = anno_id
-                            
-                            st.session_state.clear_trigger += 1
-                            st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
-                            st.rerun() 
-                else:
-                    st.session_state.last_canvas_sig = None
+                        st.session_state.selected_box_id = clicked_id
+                        st.session_state.clear_trigger += 1
+                        st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
+                        st.rerun()
+                    
+                    else:
+                        # [드래그 이벤트] 새로운 박스 추출 (오토피팅 적용)
+                        page = doc.load_page(st.session_state.current_page)
+                        x0 = new_rect["left"] / zoom
+                        y0 = new_rect["top"] / zoom
+                        x1 = (new_rect["left"] + new_rect["width"]) / zoom
+                        y1 = (new_rect["top"] + new_rect["height"]) / zoom
+                        
+                        user_pdf_rect = fitz.Rect(x0, y0, x1, y1)
+                        fitted_pdf_rect = get_autofit_rect(page, user_pdf_rect, autofit_enabled)
+                        
+                        text = get_sorted_text(page, fitted_pdf_rect)
+                        img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
+                        
+                        anno_id = f"p{st.session_state.current_page}_{img_name}"
+                        new_anno = {
+                            'id': anno_id,
+                            'page_idx': st.session_state.current_page,
+                            'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
+                            'text': text,
+                            'img_name': img_name,
+                            'img_path': img_path
+                        }
+                        st.session_state.annotations.append(new_anno)
+                        st.session_state.selected_box_id = anno_id
+                        
+                        st.session_state.clear_trigger += 1
+                        st.session_state.canvas_state = {"version": "4.4.0", "objects": [], "trigger": st.session_state.clear_trigger}
+                        st.rerun() 
+            else:
+                st.session_state.last_canvas_sig = None
 
     with right_col:
         st.write("**데이터 추출 목록**")
@@ -266,15 +265,13 @@ if uploaded_file is not None:
                 coords = f"[X:{rect[0]:.0f}, Y:{rect[1]:.0f}, W:{rect[2]-rect[0]:.0f}, H:{rect[3]-rect[1]:.0f}]"
                 return f"[P{anno['page_idx'] + 1}] {coords} | {preview}"
 
-            # 우측 목록 스크롤 컨테이너 처리 (이미지의 파란색 박스 요청 반영)
-            with st.container(height=280, border=True):
-                selected_id = st.radio(
-                    "항목 선택",
-                    options=valid_ids,
-                    format_func=format_list_item,
-                    index=valid_ids.index(st.session_state.selected_box_id) if st.session_state.selected_box_id else 0,
-                    label_visibility="collapsed"
-                )
+            selected_id = st.radio(
+                "항목 선택",
+                options=valid_ids,
+                format_func=format_list_item,
+                index=valid_ids.index(st.session_state.selected_box_id) if st.session_state.selected_box_id else 0,
+                label_visibility="collapsed"
+            )
 
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
@@ -292,17 +289,15 @@ if uploaded_file is not None:
             st.markdown("---")
             st.write("**🔍 선택 항목 상세 편집기**")
 
-            # 상세 편집기 스크롤 컨테이너 처리
-            with st.container(height=350, border=True):
-                if os.path.exists(selected_anno['img_path']):
-                    st.image(selected_anno['img_path'], use_container_width=True)
-                
-                new_text = st.text_area("텍스트 원문", value=selected_anno['text'], height=150)
-                if new_text != selected_anno['text']:
-                    for a in st.session_state.annotations:
-                        if a['id'] == st.session_state.selected_box_id:
-                            a['text'] = new_text
-                            break
+            if os.path.exists(selected_anno['img_path']):
+                st.image(selected_anno['img_path'], use_column_width=True)
+            
+            new_text = st.text_area("텍스트 원문", value=selected_anno['text'], height=150)
+            if new_text != selected_anno['text']:
+                for a in st.session_state.annotations:
+                    if a['id'] == st.session_state.selected_box_id:
+                        a['text'] = new_text
+                        break
 
             st.markdown("---")
             export_data = []
