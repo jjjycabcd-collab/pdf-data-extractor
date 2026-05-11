@@ -122,7 +122,6 @@ if uploaded_file is not None:
     col2.button("다음 ▶", on_click=go_next, args=(total_pages,))
     st.sidebar.write(f"**Page:** {st.session_state.current_page + 1} / {total_pages}")
 
-    # 투명도 합성 및 배경 준비
     bg_bytes = get_cached_bg_bytes(st.session_state.file_bytes, st.session_state.current_page)
     bg_image = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     view_zoom = 1.0 
@@ -144,11 +143,10 @@ if uploaded_file is not None:
 
     bg_image = Image.alpha_composite(bg_image, overlay)
 
-    # 화면 분할
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("**PDF 뷰어 (새로운 영역 드래그 추출)**")
+        st.write("**PDF 뷰어 (클릭: 선택 / 드래그: 영역 추출)**")
         
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -168,53 +166,76 @@ if uploaded_file is not None:
             
             if len(current_canvas_objects) > 0:
                 new_rect = current_canvas_objects[-1]
-                page = doc.load_page(st.session_state.current_page)
+                w, h = new_rect["width"], new_rect["height"]
                 
-                x0 = new_rect["left"] / view_zoom
-                y0 = new_rect["top"] / view_zoom
-                x1 = (new_rect["left"] + new_rect["width"]) / view_zoom
-                y1 = (new_rect["top"] + new_rect["height"]) / view_zoom
+                # ★ 클릭 vs 드래그 판별 마법 (가로/세로가 15px 이하의 미세한 상자면 클릭으로 간주)
+                if max(w, h) < 15:
+                    click_x = (new_rect["left"] + w/2) / view_zoom
+                    click_y = (new_rect["top"] + h/2) / view_zoom
+                    
+                    clicked_id = None
+                    # 나중에 그려진(위쪽에 있는) 박스부터 역순으로 클릭 충돌 체크
+                    for anno in reversed(st.session_state.annotations):
+                        if anno['page_idx'] == st.session_state.current_page:
+                            x0, y0, x1, y1 = anno['pdf_rect']
+                            if x0 <= click_x <= x1 and y0 <= click_y <= y1:
+                                clicked_id = anno['id']
+                                break
+                    
+                    if clicked_id:
+                        st.session_state.selected_box_id = clicked_id
+                    
+                    # 미세한 점(잔상)을 지우기 위해 캔버스 초기화
+                    st.session_state.canvas_key_counter += 1
+                    st.rerun()
                 
-                user_pdf_rect = fitz.Rect(x0, y0, x1, y1)
-                fitted_pdf_rect = get_autofit_rect(page, user_pdf_rect, autofit_enabled)
-                
-                text = get_sorted_text(page, fitted_pdf_rect)
-                img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
-                
-                anno_id = f"p{st.session_state.current_page}_{img_name}"
-                new_anno = {
-                    'id': anno_id,
-                    'page_idx': st.session_state.current_page,
-                    'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
-                    'text': text,
-                    'img_name': img_name,
-                    'img_path': img_path
-                }
-                st.session_state.annotations.append(new_anno)
-                
-                st.session_state.selected_box_id = anno_id
-                st.session_state.canvas_key_counter += 1
-                st.rerun() 
+                else:
+                    # 정상적인 드래그(영역 추출) 로직
+                    page = doc.load_page(st.session_state.current_page)
+                    x0 = new_rect["left"] / view_zoom
+                    y0 = new_rect["top"] / view_zoom
+                    x1 = (new_rect["left"] + new_rect["width"]) / view_zoom
+                    y1 = (new_rect["top"] + new_rect["height"]) / view_zoom
+                    
+                    user_pdf_rect = fitz.Rect(x0, y0, x1, y1)
+                    fitted_pdf_rect = get_autofit_rect(page, user_pdf_rect, autofit_enabled)
+                    
+                    text = get_sorted_text(page, fitted_pdf_rect)
+                    img_name, img_path = save_cropped_image(page, fitted_pdf_rect)
+                    
+                    anno_id = f"p{st.session_state.current_page}_{img_name}"
+                    new_anno = {
+                        'id': anno_id,
+                        'page_idx': st.session_state.current_page,
+                        'pdf_rect': [fitted_pdf_rect.x0, fitted_pdf_rect.y0, fitted_pdf_rect.x1, fitted_pdf_rect.y1],
+                        'text': text,
+                        'img_name': img_name,
+                        'img_path': img_path
+                    }
+                    st.session_state.annotations.append(new_anno)
+                    
+                    st.session_state.selected_box_id = anno_id
+                    st.session_state.canvas_key_counter += 1
+                    st.rerun() 
 
     with right_col:
         st.write("**데이터 추출 목록**")
         
         if st.session_state.annotations:
-            # 1. 추출 목록 리스트 영역 (라디오 버튼 활용)
             anno_dict = {a['id']: a for a in st.session_state.annotations}
             valid_ids = list(anno_dict.keys())
             
-            # 선택된 아이템 무결성 검증
             if st.session_state.selected_box_id not in valid_ids:
                 st.session_state.selected_box_id = valid_ids[-1] if valid_ids else None
 
-            # 리스트에 보여질 텍스트 포맷팅 함수
+            # ★ 목록에 좌표 정보([X, Y, W, H]) 추가 반영
             def format_list_item(anno_id):
                 anno = anno_dict[anno_id]
-                preview_text = anno['text'][:25].replace('\n', ' ') + ("..." if len(anno['text']) > 25 else "")
-                return f"[Page {anno['page_idx'] + 1}] {anno['img_name']} | {preview_text}"
+                preview = anno['text'][:15].replace('\n', ' ') + ("..." if len(anno['text']) > 15 else "")
+                rect = anno['pdf_rect']
+                coords = f"[X:{rect[0]:.1f}, Y:{rect[1]:.1f}, W:{rect[2]-rect[0]:.1f}, H:{rect[3]-rect[1]:.1f}]"
+                return f"[P{anno['page_idx'] + 1}] {coords} | {preview}"
 
-            # PC버전의 ListWidget 역할을 하는 라디오 버튼
             selected_id = st.radio(
                 "항목 선택",
                 options=valid_ids,
@@ -223,18 +244,15 @@ if uploaded_file is not None:
                 label_visibility="collapsed"
             )
 
-            # 리스트에서 항목 클릭 시 동작 로직 (양방향 연동 & 자동 페이지 이동)
             if selected_id != st.session_state.selected_box_id:
                 st.session_state.selected_box_id = selected_id
                 target_page = anno_dict[selected_id]['page_idx']
-                # 다른 페이지의 아이템을 클릭하면 자동으로 해당 페이지로 뷰어 이동
                 if target_page != st.session_state.current_page:
                     st.session_state.current_page = target_page
                 st.rerun()
 
             selected_anno = anno_dict[st.session_state.selected_box_id]
 
-            # 삭제 버튼
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🗑️ 선택 항목 삭제", use_container_width=True):
                 if os.path.exists(selected_anno['img_path']):
@@ -246,21 +264,17 @@ if uploaded_file is not None:
             st.markdown("---")
             st.write("**🔍 선택 항목 상세 편집기**")
 
-            # 2. 크롭 이미지 영역
             if os.path.exists(selected_anno['img_path']):
                 st.image(selected_anno['img_path'], use_column_width=True)
             
-            # 3. 텍스트 수정 영역
             new_text = st.text_area("텍스트 원문", value=selected_anno['text'], height=200)
             if new_text != selected_anno['text']:
-                # 텍스트 수정 즉시 원본 데이터에 반영
                 for a in st.session_state.annotations:
                     if a['id'] == st.session_state.selected_box_id:
                         a['text'] = new_text
                         break
 
             st.markdown("---")
-            # 4. JSON 다운로드 버튼
             export_data = []
             for anno in st.session_state.annotations:
                 export_data.append({
