@@ -26,7 +26,7 @@ if not os.path.exists(IMAGE_SAVE_DIR):
     os.makedirs(IMAGE_SAVE_DIR)
 
 # ==========================================
-# 2. 핵심 로직 함수 (기존 로직 유지)
+# 2. 핵심 로직 함수
 # ==========================================
 def get_autofit_rect(page, pdf_rect, autofit_enabled):
     if not autofit_enabled: 
@@ -104,9 +104,11 @@ if uploaded_file is not None:
     # 해상도 조절 (scale_factor 2.0 수준)
     zoom = 2.0
     mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat)
+    
+    # [수정됨] alpha=False를 적용하여 투명 배경을 강제로 흰색으로 만들고, RGB로 변환
+    pix = page.get_pixmap(matrix=mat, alpha=False)
     img_data = pix.tobytes("png")
-    bg_image = Image.open(io.BytesIO(img_data))
+    bg_image = Image.open(io.BytesIO(img_data)).convert("RGB")
 
     # 메인 레이아웃 분할
     left_col, right_col = st.columns([6, 4])
@@ -171,7 +173,8 @@ if uploaded_file is not None:
             with st.expander(f"Page {anno['page_idx'] + 1} - {anno['img_name']}", expanded=True):
                 # 크롭된 이미지 보여주기
                 if os.path.exists(anno['img_path']):
-                    st.image(anno['img_path'], use_container_width=True)
+                    # [수정됨] use_container_width 대신 use_column_width 사용 (버전 호환성 문제 해결)
+                    st.image(anno['img_path'], use_column_width=True)
                 
                 # 텍스트 에디터
                 new_text = st.text_area("텍스트 수정", value=anno['text'], height=100, key=f"text_{idx}")
