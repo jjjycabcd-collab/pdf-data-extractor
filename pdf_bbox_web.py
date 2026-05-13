@@ -73,7 +73,6 @@ uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", typ
 
 if uploaded_file is not None:
     if st.session_state.file_name != uploaded_file.name:
-        # [수정] 새 PDF 로드 시 이전 작업 찌꺼기 이미지들 일괄 삭제
         for f in os.listdir(IMAGE_SAVE_DIR):
             try: os.remove(os.path.join(IMAGE_SAVE_DIR, f))
             except: pass
@@ -172,9 +171,6 @@ if st.session_state.file_bytes:
             key=f"canvas_p{st.session_state.current_page}_m{tag_mode}_c{st.session_state.clear_trigger}",
         )
 
-        # ----------------------------------------------------
-        # 핵심 캔버스 상호작용 (무한루프 방지)
-        # ----------------------------------------------------
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             
@@ -195,7 +191,6 @@ if st.session_state.file_bytes:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
                                     
-                                    # 수정(리사이즈/이동) 시에도 정밀 오토피팅 활성화 시 적용
                                     if autofit_enabled:
                                         words = page.get_text("words")
                                         matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
@@ -205,10 +200,11 @@ if st.session_state.file_bytes:
 
                                     anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
                                     
-                                    # [수정] 잦은 렌더링 시 브라우저가 파일을 찾지 못하는 에러 방지를 위해,
-                                    # 드래그 중에 이전 파일을 강제 삭제하지 않고 남겨둠 (추후 초기화 시 일괄 정리)
-                                    
-                                    # 캐시 갱신을 위해 새로운 파일명으로 이미지 캡처 및 저장
+                                    # 안전해졌으니, 불필요한 이전 이미지는 즉각 삭제하여 하드 용량 확보
+                                    if os.path.exists(anno['img_path']):
+                                        try: os.remove(anno['img_path'])
+                                        except: pass
+                                        
                                     st.session_state.crop_counter += 1
                                     new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                     new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
@@ -216,10 +212,7 @@ if st.session_state.file_bytes:
                                     
                                     anno['img_name'] = new_img_name
                                     anno['img_path'] = new_img_path
-                                    
-                                    # 새로운 영역에 해당하는 텍스트 다시 추출
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
-                                    
                                     modified = True
                 
                 if modified:
@@ -307,7 +300,6 @@ if st.session_state.file_bytes:
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
                 return "[P" + str(a['page_idx']+1) + "] " + coords + " | " + a['text'][:20].replace('\n', ' ') + "..."
 
-            # 현재 상태에 맞춰 인덱스 결정
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in valid_ids else "NEW_MODE"
             idx = radio_options.index(current_val)
 
@@ -325,10 +317,11 @@ if st.session_state.file_bytes:
             if st.session_state.selected_box_id in anno_dict:
                 curr_anno = anno_dict[st.session_state.selected_box_id]
                 
-                # [수정] 파일 경로를 직접 주지 않고 PIL 객체로 변환해서 출력하여 MediaFileStorageError 방지
+                # [핵심 수정 내용] 이미지를 파일 경로로 주지 않고 Bytes로 직접 읽어서 메모리에 적재 후 표시
                 if os.path.exists(curr_anno['img_path']):
-                    img_to_show = Image.open(curr_anno['img_path'])
-                    st.image(img_to_show, use_column_width=True)
+                    with open(curr_anno['img_path'], "rb") as img_file:
+                        img_bytes = img_file.read()
+                    st.image(img_bytes, use_column_width=True)
                 else:
                     st.warning("이미지 파일을 찾을 수 없습니다. 다시 드래그하여 영역을 갱신해 주세요.")
 
