@@ -12,8 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# [수정] 1. 숨김 버튼 제거용 CSS 
-# [수정] 2. Number Input(페이지 입력칸)의 증감 화살표를 제거하고 텍스트를 가운데 정렬하는 CSS 추가
+# 숨김 버튼 제거 및 숫자 입력창 스타일 조정 CSS
 st.markdown(
     """
     <style>
@@ -21,7 +20,6 @@ st.markdown(
     div[data-testid="stButton"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
     div[data-testid="stTooltipHoverTarget"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
     
-    /* 숫자 입력창 화살표 숨기기 및 가운데 정렬 */
     div[data-testid="stNumberInputStepUp"], div[data-testid="stNumberInputStepDown"] { display: none !important; }
     input[type="number"] { -moz-appearance: textfield; text-align: center !important; font-weight: bold; }
     input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -68,7 +66,6 @@ def go_last(total_pages):
     st.session_state.current_page = max(0, total_pages - 1)
     st.session_state.selected_box_id = None
 
-# [신규] 페이지 텍스트 입력 후 엔터 쳤을 때 동작하는 콜백
 def page_input_changed():
     target = st.session_state.page_input_widget - 1
     if target != st.session_state.current_page:
@@ -224,14 +221,34 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
+        # ====================================================
+        # [신규] 상단 온라인 도움말
+        # ====================================================
+        with st.expander("💡 온라인 도움말 및 사용 가이드 (클릭하여 펼치기)", expanded=False):
+            st.markdown("""
+            **1. 기본 조작 및 라벨 관리**
+            - 좌측 사이드바에서 PDF 파일을 업로드하고, 태깅할 데이터의 속성(라벨)을 선택하거나 새로 추가/삭제할 수 있습니다.
+            
+            **2. 태깅 모드 가이드**
+            - **Drag 모드:** 문서의 빈 공간을 마우스로 드래그하면 새로운 박스가 그려지고 데이터가 추출됩니다. (그리기 전 좌측에서 라벨을 먼저 선택하세요)
+            - **Modify 모드:** 이미 그려진 박스를 클릭하면 수정 모드가 됩니다. 크기나 위치를 조절한 뒤, 빈 공간을 클릭하거나 `ESC` 키를 누르면 수정사항이 저장되고 다시 Drag 모드로 복귀합니다.
+            
+            **3. ⌨️ 작업 효율을 높이는 단축키**
+            - `Ctrl + 1~9` : 작업 중 마우스 이동 없이 태깅할 라벨을 즉시 변경합니다. (**Ctrl 키를 꾹 누르고 있으면** 화면 중앙에 지정된 숫자 단축키 안내창이 나타납니다.)
+            - `◀` / `▶` : 이전 페이지 / 다음 페이지로 이동합니다.
+            - `Delete` 또는 `Backspace` : 현재 선택된 박스를 즉시 삭제합니다.
+            - `ESC` : 수정 중인 작업을 취소하고 Drag 모드로 강제 복귀합니다.
+            
+            **4. 데이터 출력**
+            - 모든 태깅 작업이 끝나면 우측 하단의 버튼을 통해 메타데이터를 **마크다운(.md)** 또는 **JSON** 형식으로 다운로드할 수 있습니다.
+            """)
+
         st.write("### PDF 상호작용 구축 도구")
 
-        # [수정] 네비게이션 컬럼 재배치: 가운데 텍스트 입력칸으로 교체
         ctrl_cols = st.columns([1.2, 1.2, 2, 1.2, 1.2, 2])
         ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
         ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True, help="이전 페이지")
         
-        # 엔터 치면 이동하게 하는 텍스트 입력칸
         ctrl_cols[2].number_input("페이지 입력", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, on_change=page_input_changed, key="page_input_widget", label_visibility="collapsed")
         
         ctrl_cols[3].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
@@ -466,7 +483,6 @@ for i, lbl in enumerate(st.session_state.labels):
         st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
-
 # ==========================================
 # 6. JavaScript 단축키 연동 및 가이드 오버레이
 # ==========================================
@@ -530,7 +546,6 @@ doc._my_keydown_listener = function(e) {{
             overlay.style.display = 'block';
         }}
     }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
-        // [수정 핵심] 브라우저 기본 단축키(Ctrl+숫자 탭이동) 차단!
         if (e.ctrlKey) {{
             e.preventDefault();
         }}
