@@ -12,11 +12,23 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
+# 화면에 보이지 않아야 할 숨김 버튼들(ESC, 단축키 처리용)을 감추는 CSS
+st.markdown(
+    """
+    <style>
+    button[title="hidden_esc"], button[title="shortcut_btn"] { display: none !important; }
+    div:has(> button[title="hidden_esc"]), div:has(> button[title="shortcut_btn"]) { display: none !important; margin: 0 !important; padding: 0 !important; height: 0 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
     'last_canvas_sig': None, 'file_name': "",
-    'labels': ['논문명', '저자명', '소속기관', '초록', '키워드'],
+    # 초기 라벨 리스트 (복사본 생성으로 참조 버그 원천 차단)
+    'labels': ['논문명', '저자명', '소속기관', '초록', '키워드'].copy(),
     'active_label': '논문명'
 }
 
@@ -62,6 +74,9 @@ def update_label(aid):
         if a['id'] == aid:
             a['label'] = st.session_state[f"lbl_sel_{aid}"]
             break
+
+def set_active_label(lbl):
+    st.session_state.active_label = lbl
 
 def clean_text(text):
     if not text: return ""
@@ -113,13 +128,20 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     
-    st.session_state.active_label = st.sidebar.radio("📌 현재 태깅 라벨 (드래그 전 선택)", options=st.session_state.labels)
+    # 라벨 인덱스 싱크 맞추기 (단축키 등으로 상태가 변했을 때 UI 반영)
+    try:
+        active_idx = st.session_state.labels.index(st.session_state.active_label)
+    except ValueError:
+        active_idx = 0
+        st.session_state.active_label = st.session_state.labels[0]
+        
+    st.session_state.active_label = st.sidebar.radio("📌 현재 태깅 라벨 (드래그 전 선택)", options=st.session_state.labels, index=active_idx)
     
     with st.sidebar.expander("⚙️ 라벨 추가/삭제 관리", expanded=False):
         new_lbl = st.text_input("새 라벨 이름")
         if st.button("➕ 라벨 추가"):
             if new_lbl and new_lbl not in st.session_state.labels:
-                st.session_state.labels.append(new_lbl)
+                st.session_state.labels = st.session_state.labels + [new_lbl]
                 st.rerun()
                 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -127,7 +149,9 @@ if st.session_state.file_bytes:
         del_lbl = st.selectbox("삭제할 라벨 선택", options=st.session_state.labels)
         if st.button("🗑️ 라벨 삭제"):
             if len(st.session_state.labels) > 1:
-                st.session_state.labels.remove(del_lbl)
+                # [버그 수정] 삭제 대상만 제외하고 새로운 리스트를 명시적으로 재할당하여 싹 지워지는 문제 해결
+                st.session_state.labels = [lbl for lbl in st.session_state.labels if lbl != del_lbl]
+                
                 if st.session_state.active_label == del_lbl:
                     st.session_state.active_label = st.session_state.labels[0]
                 for a in st.session_state.annotations:
@@ -178,20 +202,22 @@ if st.session_state.file_bytes:
     with left_col:
         st.write("### PDF 상호작용 구축 도구")
         
-        # [신규] 상단 페이지 컨트롤 바 (사이드바 닫힘 대비)
+        # [신규] 단축키 처리를 위한 숨김 버튼 생성 (자바스크립트가 클릭할 대상)
+        for i, lbl in enumerate(st.session_state.labels):
+            if i < 9:
+                st.button(f"hidden_lbl_{i+1}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,), help="shortcut_btn")
+        
+        esc_pressed = st.button("ESC", help="hidden_esc")
+
         ctrl_cols = st.columns([1, 1, 1, 1, 5, 2])
         ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
         ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True, help="이전 페이지")
         ctrl_cols[2].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
         ctrl_cols[3].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True, help="마지막 페이지")
         
-        # 슬라이더로 빠른 페이지 탐색
         new_page = ctrl_cols[4].slider("페이지 이동", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, label_visibility="collapsed")
-        
-        # 현재 페이지 현황 및 파일명 표시
         ctrl_cols[5].markdown(f"<div style='text-align: right; padding-top: 5px;'><b>{st.session_state.current_page + 1} / {total_pages}</b></div>", unsafe_allow_html=True)
         
-        # 슬라이더 값이 변경되면 세션 업데이트 후 리렌더링
         if new_page - 1 != st.session_state.current_page:
             st.session_state.current_page = new_page - 1
             st.session_state.selected_box_id = None
@@ -265,14 +291,14 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                if mode_toggle_pressed:
+                if mode_toggle_pressed or esc_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
                 elif modified:
                     st.rerun()
 
             else:
-                if mode_toggle_pressed:
+                if mode_toggle_pressed or esc_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
                 
@@ -410,27 +436,88 @@ if st.session_state.file_bytes:
             st.info("왼쪽 뷰어에서 영역을 드래그하여 태깅을 시작하세요.")
 
 # ==========================================
-# 6. JavaScript 단축키 연동
+# 6. JavaScript 단축키 연동 및 가이드 오버레이
 # ==========================================
-components.html("""
+# 자바스크립트로 주입할 가이드 오버레이 HTML을 안전하게 한 줄로 생성
+shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키)</b></div>"
+shortcut_html += "<div style='display:grid; grid-template-columns: 40px auto; gap: 8px 15px; font-size:1.1em;'>"
+for i, lbl in enumerate(st.session_state.labels):
+    if i < 9:
+        shortcut_html += f"<div><span style='background:#444; padding:3px 8px; border-radius:4px;'>{i+1}</span></div><div>{lbl}</div>"
+shortcut_html += "</div>"
+
+components.html(f"""
 <script>
 const doc = window.parent.document;
-doc.addEventListener('keydown', function(e) {
-    if (e.key === 'ArrowLeft') {
+const currentMode = "{tag_mode}";
+
+// Ctrl 가이드용 팝업(오버레이) DOM 생성
+let overlay = doc.getElementById('shortcut-overlay');
+if (!overlay) {{
+    overlay = doc.createElement('div');
+    overlay.id = 'shortcut-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '50%';
+    overlay.style.left = '50%';
+    overlay.style.transform = 'translate(-50%, -50%)';
+    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
+    overlay.style.color = '#fff';
+    overlay.style.padding = '25px 35px';
+    overlay.style.borderRadius = '12px';
+    overlay.style.zIndex = '9999';
+    overlay.style.display = 'none';
+    overlay.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
+    overlay.style.pointerEvents = 'none'; // 마우스 클릭 방해 금지
+    doc.body.appendChild(overlay);
+}}
+overlay.innerHTML = "{shortcut_html}";
+
+// 중복 이벤트 부착을 방지하기 위해 기존 리스너 제거 후 새로 등록
+if (doc._my_keydown_listener) {{
+    doc.removeEventListener('keydown', doc._my_keydown_listener);
+    doc.removeEventListener('keyup', doc._my_keyup_listener);
+}}
+
+doc._my_keydown_listener = function(e) {{
+    if (e.key === 'ArrowLeft') {{
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀');
         if (btn) btn.click();
-    } else if (e.key === 'ArrowRight') {
+    }} else if (e.key === 'ArrowRight') {{
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
         if (btn) btn.click();
-    } else if (e.key === 'Escape') {
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
-        if (btn) btn.click();
-    } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+    }} else if (e.key === 'Escape') {{
+        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
+        if (btn_toggle) btn_toggle.click();
+        
+        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
+        if (btn_esc) btn_esc.click();
+    }} else if (e.key === 'Delete' || e.key === 'Backspace') {{
+        if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {{
             const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
             if (btn) btn.click();
-        }
-    }
-});
+        }}
+    }} else if (e.key === 'Control') {{
+        // 드래그 모드(rect)일 때 Ctrl을 누르면 오버레이 노출
+        if (currentMode !== 'transform') {{
+            overlay.style.display = 'block';
+        }}
+    }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
+        // 숫자키 1~9 입력 시, 라벨 변경 버튼 클릭 (입력창 포커스 중일 땐 예외 처리)
+        if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {{
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === 'hidden_lbl_' + e.key);
+            if (btn) btn.click();
+        }}
+    }}
+}};
+
+doc._my_keyup_listener = function(e) {{
+    if (e.key === 'Control') {{
+        // Ctrl에서 손을 떼면 가이드 창 사라짐
+        overlay.style.display = 'none';
+    }}
+}};
+
+doc.addEventListener('keydown', doc._my_keydown_listener);
+doc.addEventListener('keyup', doc._my_keyup_listener);
 </script>
 """, height=0)
