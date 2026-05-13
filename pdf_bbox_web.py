@@ -16,7 +16,6 @@ state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
     'last_canvas_sig': None, 'file_name': "",
-    # [신규] 라벨 관리 상태 추가
     'labels': ['논문명', '저자명', '소속기관', '초록', '키워드'],
     'active_label': '논문명'
 }
@@ -32,12 +31,20 @@ if not os.path.exists(IMAGE_SAVE_DIR):
 # ==========================================
 # 2. 콜백 및 유틸리티 함수
 # ==========================================
+def go_first():
+    st.session_state.current_page = 0
+    st.session_state.selected_box_id = None
+
 def go_prev():
     st.session_state.current_page = max(0, st.session_state.current_page - 1)
     st.session_state.selected_box_id = None
 
 def go_next(total_pages):
     st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1)
+    st.session_state.selected_box_id = None
+
+def go_last(total_pages):
+    st.session_state.current_page = max(0, total_pages - 1)
     st.session_state.selected_box_id = None
 
 def delete_single_item(anno_id):
@@ -106,10 +113,8 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     
-    # [신규] 사이드바 - 태깅할 대상 라벨 선택
     st.session_state.active_label = st.sidebar.radio("📌 현재 태깅 라벨 (드래그 전 선택)", options=st.session_state.labels)
     
-    # [신규] 사이드바 - 라벨 항목 추가/삭제 관리
     with st.sidebar.expander("⚙️ 라벨 추가/삭제 관리", expanded=False):
         new_lbl = st.text_input("새 라벨 이름")
         if st.button("➕ 라벨 추가"):
@@ -123,10 +128,8 @@ if st.session_state.file_bytes:
         if st.button("🗑️ 라벨 삭제"):
             if len(st.session_state.labels) > 1:
                 st.session_state.labels.remove(del_lbl)
-                # 삭제된 라벨이 활성 라벨이었다면 초기화
                 if st.session_state.active_label == del_lbl:
                     st.session_state.active_label = st.session_state.labels[0]
-                # 기존에 해당 라벨로 태깅된 데이터 일괄 미지정 처리
                 for a in st.session_state.annotations:
                     if a.get('label') == del_lbl:
                         a['label'] = "미지정"
@@ -136,13 +139,6 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
-    
-    col_nav1, col_nav2 = st.sidebar.columns(2)
-    col_nav1.button("◀ 이전", on_click=go_prev)
-    col_nav2.button("다음 ▶", on_click=go_next, args=(total_pages,))
-            
-    st.sidebar.write(f"**파일:** {st.session_state.file_name}")
-    st.sidebar.write(f"**페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
     # ==========================================
     # 4. 메인 에디터 화면
@@ -181,6 +177,27 @@ if st.session_state.file_bytes:
 
     with left_col:
         st.write("### PDF 상호작용 구축 도구")
+        
+        # [신규] 상단 페이지 컨트롤 바 (사이드바 닫힘 대비)
+        ctrl_cols = st.columns([1, 1, 1, 1, 5, 2])
+        ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
+        ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True, help="이전 페이지")
+        ctrl_cols[2].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
+        ctrl_cols[3].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True, help="마지막 페이지")
+        
+        # 슬라이더로 빠른 페이지 탐색
+        new_page = ctrl_cols[4].slider("페이지 이동", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, label_visibility="collapsed")
+        
+        # 현재 페이지 현황 및 파일명 표시
+        ctrl_cols[5].markdown(f"<div style='text-align: right; padding-top: 5px;'><b>{st.session_state.current_page + 1} / {total_pages}</b></div>", unsafe_allow_html=True)
+        
+        # 슬라이더 값이 변경되면 세션 업데이트 후 리렌더링
+        if new_page - 1 != st.session_state.current_page:
+            st.session_state.current_page = new_page - 1
+            st.session_state.selected_box_id = None
+            st.rerun()
+
+        st.markdown("---")
         
         if tag_mode == "transform":
             btn_label = "🔄 현재: Modify 모드 (클릭하여 Drag 모드로 복귀)"
@@ -306,8 +323,6 @@ if st.session_state.file_bytes:
                             page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(img_path)
                             
                             anno_id = f"id_{st.session_state.crop_counter}"
-                            
-                            # [신규] 태깅되는 순간, 현재 활성화된 라벨 속성(label)을 부여하여 저장
                             st.session_state.annotations.append({
                                 'id': anno_id, 'page_idx': st.session_state.current_page,
                                 'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
@@ -326,7 +341,7 @@ if st.session_state.file_bytes:
             valid_ids = list(anno_dict.keys())
             radio_options = ["NEW_MODE"] + valid_ids
 
-            st.markdown("""<style>.scroll-v { max-height: 200px; overflow-y: auto; border: 2px solid #4A90E2; border-radius: 8px; padding: 5px; background: #fcfcfc; }</style>""", unsafe_allow_html=True)
+            st.markdown("""<style>.scroll-v { max-height: 350px; overflow-y: auto; border: 2px solid #4A90E2; border-radius: 8px; padding: 5px; background: #fcfcfc; }</style>""", unsafe_allow_html=True)
             st.markdown('<div class="scroll-v">', unsafe_allow_html=True)
             
             def format_label(aid):
@@ -335,8 +350,7 @@ if st.session_state.file_bytes:
                 a = anno_dict[aid]
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
-                coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
-                # [수정] 목록에 라벨 항목 노출
+                coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + "]"
                 return f"[P{a['page_idx']+1}] [{lbl}] {coords} | " + a['text'][:15].replace('\n', ' ') + "..."
 
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in valid_ids else "NEW_MODE"
@@ -362,7 +376,6 @@ if st.session_state.file_bytes:
                 else:
                     st.warning("이미지 파일을 찾을 수 없습니다. 다시 드래그하여 영역을 갱신해 주세요.")
 
-                # [신규] 우측 패널에서 이미 그려진 박스의 라벨을 동적으로 수정하는 기능
                 curr_lbl = curr_anno.get('label', '미지정')
                 lbl_idx = st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0
                 st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, 
@@ -377,7 +390,6 @@ if st.session_state.file_bytes:
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
-                # 마크다운 추출 시 라벨 정보 포함
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
@@ -391,7 +403,6 @@ if st.session_state.file_bytes:
                 
                 c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                # JSON 추출 시 라벨 정보 포함
                 export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
@@ -406,10 +417,10 @@ components.html("""
 const doc = window.parent.document;
 doc.addEventListener('keydown', function(e) {
     if (e.key === 'ArrowLeft') {
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀ 이전');
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀');
         if (btn) btn.click();
     } else if (e.key === 'ArrowRight') {
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '다음 ▶');
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
         if (btn) btn.click();
     } else if (e.key === 'Escape') {
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
