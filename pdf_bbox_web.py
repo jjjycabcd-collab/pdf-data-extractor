@@ -321,11 +321,32 @@ if st.session_state.file_bytes:
 
                 curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
-                c1, c2 = st.columns(2)
+                # =======================================================
+                # [핵심 수정] 4개의 버튼 레이아웃 배치 및 마크다운 생성 로직 추가
+                # =======================================================
+                c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
+                
+                # 1. 삭제
                 c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
                 
+                # 2. 저장 (기능 없이 알림만 표시)
+                if c2.button("💾 저장"):
+                    st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
+                
+                # 3. 마크다운 추출 기능 생성
+                md_text = "# 문서 추출 데이터\n\n"
+                for a in st.session_state.annotations:
+                    r = a['pdf_rect']
+                    md_text += f"### Page {a['page_idx'] + 1}\n"
+                    md_text += f"- **BBox:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                    md_text += f"```text\n{a['text']}\n
+```\n\n---\n"
+                
+                c3.download_button("📝 마크다운 추출", data=md_text, file_name="result.md", mime="text/markdown")
+                
+                # 4. JSON 추출 (기존 기능 유지)
                 export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
-                c2.download_button("💾 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
+                c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
         else:
             st.info("왼쪽 뷰어에서 영역을 드래그하여 태깅을 시작하세요.")
