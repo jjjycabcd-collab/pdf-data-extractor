@@ -12,7 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# [수정] ESC 이벤트를 처리하기 위한 숨김 버튼 CSS (화면의 공백까지 완벽히 제거)
+# ESC 이벤트를 처리하기 위한 숨김 버튼 CSS (화면의 공백까지 완벽히 제거)
 st.markdown(
     """
     <style>
@@ -152,7 +152,7 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        # [수정] 상단 타이틀 변경 및 기존 복귀 버튼 제거
+        # 상단 타이틀
         st.write("### PDF 상호작용 구축 도구")
         
         # JS에서 클릭 이벤트를 발생시킬 숨김 ESC 버튼
@@ -218,7 +218,7 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                # [수정] 조정을 마친 후 ESC가 눌렸다면 선택을 해제하여 신규 모드로 복귀
+                # 조정을 마친 후 ESC가 눌렸다면 선택을 해제하여 신규 모드로 복귀
                 if esc_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
@@ -333,17 +333,16 @@ if st.session_state.file_bytes:
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
+                # [오류 방지 핵심 수정] 문자열 안의 백틱(```) 기호를 ASCII 코드로 안전하게 결합
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
-                    md_text += f"### Page {a['page_idx'] + 1}\n"
-                    md_text += f"- **BBox:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
-                    md_text += "```text\n"
+                    md_text += "### Page " + str(a['page_idx'] + 1) + "\n"
+                    md_text += "- **BBox:** `[X: " + str(int(r[0])) + ", Y: " + str(int(r[1])) + ", W: " + str(int(r[2]-r[0])) + ", H: " + str(int(r[3]-r[1])) + "]`\n"
+                    md_text += chr(96) + chr(96) + chr(96) + "text\n"
                     md_text += str(a['text']) + "\n"
-                    md_text += "
-```\n\n---\n"
+                    md_text += chr(96) + chr(96) + chr(96) + "\n\n---\n"
                 
-                # [수정] 마크다운 추출 명칭 변경
                 c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
                 export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
@@ -366,7 +365,6 @@ doc.addEventListener('keydown', function(e) {
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '다음 ▶');
         if (btn) btn.click();
     } else if (e.key === 'Escape') {
-        // [수정] 숨겨진 ESC 트리거 버튼을 찾아서 클릭 이벤트를 파이썬으로 넘깁니다.
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
         if (btn) btn.click();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
