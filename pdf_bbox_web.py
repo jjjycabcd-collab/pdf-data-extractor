@@ -12,10 +12,11 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
+# 깜빡임의 주범이었던 'clear_trigger'를 제거하여 캔버스가 파괴/재생성되는 것을 방지합니다.
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
-    'clear_trigger': 0, 'last_canvas_sig': None, 'file_name': ""
+    'last_canvas_sig': None, 'file_name': ""
 }
 
 for key, default in state_keys.items():
@@ -32,12 +33,10 @@ if not os.path.exists(IMAGE_SAVE_DIR):
 def go_prev():
     st.session_state.current_page = max(0, st.session_state.current_page - 1)
     st.session_state.selected_box_id = None
-    st.session_state.clear_trigger += 1
 
 def go_next(total_pages):
     st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1)
     st.session_state.selected_box_id = None
-    st.session_state.clear_trigger += 1
 
 def delete_single_item(anno_id):
     for i, a in enumerate(st.session_state.annotations):
@@ -48,7 +47,6 @@ def delete_single_item(anno_id):
             st.session_state.annotations.pop(i)
             break
     st.session_state.selected_box_id = None
-    st.session_state.clear_trigger += 1
 
 def clean_text(text):
     if not text: return ""
@@ -84,7 +82,6 @@ if uploaded_file is not None:
         st.session_state.annotations = []
         st.session_state.crop_counter = 0
         st.session_state.selected_box_id = None
-        st.session_state.clear_trigger += 1
         st.rerun()
 else:
     if not st.session_state.file_bytes:
@@ -122,7 +119,7 @@ if st.session_state.file_bytes:
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
-    # Fabric.js 객체 세팅
+    # Fabric.js 객체 세팅 (상태 변경 시 이 객체만 부드럽게 갱신됩니다)
     fabric_objects = []
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -154,9 +151,9 @@ if st.session_state.file_bytes:
             if tag_mode == "transform":
                 if st.button("🔄 신규 태깅 모드로 복귀", key="btn_return_new"):
                     st.session_state.selected_box_id = None
-                    st.session_state.clear_trigger += 1
                     st.rerun()
 
+        # [핵심 수정] 캔버스 Key를 고정하여 Iframe 재생성(깜빡임) 방지
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -168,9 +165,12 @@ if st.session_state.file_bytes:
             width=canvas_w,
             drawing_mode=tag_mode,
             display_toolbar=False,
-            key=f"canvas_p{st.session_state.current_page}_m{tag_mode}_c{st.session_state.clear_trigger}",
+            key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}",
         )
 
+        # ----------------------------------------------------
+        # 핵심 캔버스 상호작용
+        # ----------------------------------------------------
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             
@@ -200,7 +200,6 @@ if st.session_state.file_bytes:
 
                                     anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
                                     
-                                    # 안전해졌으니, 불필요한 이전 이미지는 즉각 삭제하여 하드 용량 확보
                                     if os.path.exists(anno['img_path']):
                                         try: os.remove(anno['img_path'])
                                         except: pass
@@ -216,7 +215,6 @@ if st.session_state.file_bytes:
                                     modified = True
                 
                 if modified:
-                    st.session_state.clear_trigger += 1
                     st.rerun()
 
             else:
@@ -250,8 +248,7 @@ if st.session_state.file_bytes:
                             
                             if clicked_id:
                                 st.session_state.selected_box_id = clicked_id
-                            st.session_state.clear_trigger += 1
-                            st.rerun()
+                                st.rerun()
                             
                         elif w >= 10 and h >= 10:
                             # 2. 정상 드래그 감지 (새 박스 추가)
@@ -279,7 +276,6 @@ if st.session_state.file_bytes:
                             })
                             
                             st.session_state.selected_box_id = None
-                            st.session_state.clear_trigger += 1
                             st.rerun()
 
     with right_col:
@@ -310,14 +306,12 @@ if st.session_state.file_bytes:
                 st.session_state.selected_box_id = None if selected_id == "NEW_MODE" else selected_id
                 if selected_id != "NEW_MODE":
                     st.session_state.current_page = anno_dict[selected_id]['page_idx']
-                st.session_state.clear_trigger += 1
                 st.rerun()
 
             st.markdown("---")
             if st.session_state.selected_box_id in anno_dict:
                 curr_anno = anno_dict[st.session_state.selected_box_id]
                 
-                # [핵심 수정 내용] 이미지를 파일 경로로 주지 않고 Bytes로 직접 읽어서 메모리에 적재 후 표시
                 if os.path.exists(curr_anno['img_path']):
                     with open(curr_anno['img_path'], "rb") as img_file:
                         img_bytes = img_file.read()
