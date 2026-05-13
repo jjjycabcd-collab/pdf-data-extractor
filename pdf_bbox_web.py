@@ -144,7 +144,7 @@ if st.session_state.file_bytes:
     with left_col:
         header_col1, header_col2 = st.columns([7, 3])
         with header_col1:
-            status_txt = "🔧 수정 모드 (조정 완료 시 자동 복귀)" if tag_mode=="transform" else "🖋️ 태깅 모드 (빈 공간 드래그: 추가 / 기존 박스 클릭: 수정)"
+            status_txt = "🔧 수정 모드 (새 박스를 그리려면 복귀 버튼이나 ESC를 누르세요)" if tag_mode=="transform" else "🖋️ 태깅 모드 (빈 공간 드래그: 추가 / 기존 박스 클릭: 수정)"
             st.write(f"**[상태] {status_txt}**")
         with header_col2:
             if tag_mode == "transform":
@@ -219,9 +219,8 @@ if st.session_state.file_bytes:
                                     
                                     modified = True
                 
-                # 조정을 마쳤다면 즉시 신규 모드로 자동 복귀
+                # 조정을 마쳤을 때, 우측 패널에서 갱신된 내역을 확인할 수 있도록 선택 상태(selected_box_id) 유지
                 if modified:
-                    st.session_state.selected_box_id = None
                     st.session_state.clear_trigger += 1
                     st.rerun()
 
