@@ -12,7 +12,17 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# 깜빡임의 주범이었던 'clear_trigger'를 제거하여 캔버스가 파괴/재생성되는 것을 방지합니다.
+# [수정] ESC 이벤트를 처리하기 위한 숨김 버튼 CSS (화면의 공백까지 완벽히 제거)
+st.markdown(
+    """
+    <style>
+    button[title="hidden_esc"] { display: none !important; }
+    div:has(> button[title="hidden_esc"]) { display: none !important; margin: 0 !important; padding: 0 !important; height: 0 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
@@ -119,7 +129,6 @@ if st.session_state.file_bytes:
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
-    # Fabric.js 객체 세팅
     fabric_objects = []
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -143,15 +152,11 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        header_col1, header_col2 = st.columns([7, 3])
-        with header_col1:
-            status_txt = "🔧 수정 모드 (새 박스를 그리려면 복귀 버튼이나 ESC를 누르세요)" if tag_mode=="transform" else "🖋️ 태깅 모드 (빈 공간 드래그: 추가 / 기존 박스 클릭: 수정)"
-            st.write(f"**[상태] {status_txt}**")
-        with header_col2:
-            if tag_mode == "transform":
-                if st.button("🔄 신규 태깅 모드로 복귀", key="btn_return_new"):
-                    st.session_state.selected_box_id = None
-                    st.rerun()
+        # [수정] 상단 타이틀 변경 및 기존 복귀 버튼 제거
+        st.write("### PDF 상호작용 구축 도구")
+        
+        # JS에서 클릭 이벤트를 발생시킬 숨김 ESC 버튼
+        esc_pressed = st.button("ESC", help="hidden_esc")
 
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -185,6 +190,7 @@ if st.session_state.file_bytes:
                                 n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                 n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                 
+                                # 변경 사항이 감지되면 (ESC를 누르는 순간에도 이 로직이 먼저 실행되어 최신 상태 저장)
                                 if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
@@ -212,7 +218,11 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                if modified:
+                # [수정] 조정을 마친 후 ESC가 눌렸다면 선택을 해제하여 신규 모드로 복귀
+                if esc_pressed:
+                    st.session_state.selected_box_id = None
+                    st.rerun()
+                elif modified:
                     st.rerun()
 
             else:
@@ -316,19 +326,13 @@ if st.session_state.file_bytes:
 
                 curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
-                # =======================================================
-                # 버튼 레이아웃 배치 및 마크다운 생성 로직 (오류 방지 적용)
-                # =======================================================
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
                 
-                # 1. 삭제
                 c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
                 
-                # 2. 저장 (기능 없이 알림만 표시)
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
-                # 3. 마크다운 추출 기능 생성 (안전한 문자열 결합 방식)
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
@@ -336,11 +340,12 @@ if st.session_state.file_bytes:
                     md_text += f"- **BBox:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
                     md_text += "```text\n"
                     md_text += str(a['text']) + "\n"
-                    md_text += "```\n\n---\n"
+                    md_text += "
+```\n\n---\n"
                 
-                c3.download_button("📝 마크다운 추출", data=md_text, file_name="result.md", mime="text/markdown")
+                # [수정] 마크다운 추출 명칭 변경
+                c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                # 4. JSON 추출
                 export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
@@ -361,7 +366,8 @@ doc.addEventListener('keydown', function(e) {
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '다음 ▶');
         if (btn) btn.click();
     } else if (e.key === 'Escape') {
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('신규 태깅 모드로 복귀'));
+        // [수정] 숨겨진 ESC 트리거 버튼을 찾아서 클릭 이벤트를 파이썬으로 넘깁니다.
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
         if (btn) btn.click();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
