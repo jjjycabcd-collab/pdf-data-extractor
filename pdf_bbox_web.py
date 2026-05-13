@@ -12,16 +12,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# ESC 이벤트를 처리하기 위한 숨김 버튼 CSS (화면의 공백까지 완벽히 제거)
-st.markdown(
-    """
-    <style>
-    button[title="hidden_esc"] { display: none !important; }
-    div:has(> button[title="hidden_esc"]) { display: none !important; margin: 0 !important; padding: 0 !important; height: 0 !important; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+# (숨김 처리하던 CSS는 제거하여 버튼이 화면에 잘 보이도록 변경했습니다)
 
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
@@ -152,11 +143,15 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        # 상단 타이틀
         st.write("### PDF 상호작용 구축 도구")
         
-        # JS에서 클릭 이벤트를 발생시킬 숨김 ESC 버튼
-        esc_pressed = st.button("ESC", help="hidden_esc")
+        # [수정] 현재 모드에 따라 버튼 명칭이 'Modify <-> Drag' 로 변환되도록 설정
+        if tag_mode == "transform":
+            btn_label = "🔄 현재: Modify 모드 (클릭하여 Drag 모드로 복귀)"
+        else:
+            btn_label = "🖱️ 현재: Drag 모드 (기존 박스를 클릭하면 Modify 모드)"
+            
+        mode_toggle_pressed = st.button(btn_label, help="mode_toggle")
 
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -190,7 +185,7 @@ if st.session_state.file_bytes:
                                 n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                 n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                 
-                                # 변경 사항이 감지되면 (ESC를 누르는 순간에도 이 로직이 먼저 실행되어 최신 상태 저장)
+                                # 변경 사항이 감지되면 (버튼을 누르는 순간에도 이 로직이 먼저 실행되어 최신 상태 저장)
                                 if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
@@ -218,14 +213,19 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                # 조정을 마친 후 ESC가 눌렸다면 선택을 해제하여 신규 모드로 복귀
-                if esc_pressed:
+                # 버튼(Modify <-> Drag)을 클릭했다면 선택을 해제하여 신규 모드로 복귀
+                if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
                 elif modified:
                     st.rerun()
 
             else:
+                # Drag 모드일 때 버튼을 눌러도 초기화되도록 안전장치 마련
+                if mode_toggle_pressed:
+                    st.session_state.selected_box_id = None
+                    st.rerun()
+                
                 if len(objs) > len(fabric_objects):
                     new_obj = objs[-1]
                     obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
@@ -333,7 +333,6 @@ if st.session_state.file_bytes:
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
-                # [오류 방지 핵심 수정] 문자열 안의 백틱(```) 기호를 ASCII 코드로 안전하게 결합
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
@@ -365,7 +364,8 @@ doc.addEventListener('keydown', function(e) {
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '다음 ▶');
         if (btn) btn.click();
     } else if (e.key === 'Escape') {
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
+        // [수정] 바뀐 명칭(mode_toggle)의 버튼을 찾아 클릭하도록 처리해 혹시나 포커스가 살아있을 때 대비
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
         if (btn) btn.click();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
