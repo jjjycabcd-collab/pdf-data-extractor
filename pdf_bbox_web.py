@@ -187,7 +187,36 @@ if st.session_state.file_bytes:
                                 
                                 # 마우스를 드래그 아웃(변경 발생) 했는지 확인
                                 if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
-                                    anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                                    page = doc.load_page(st.session_state.current_page)
+                                    fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
+                                    
+                                    # 수정(리사이즈/이동) 시에도 정밀 오토피팅 활성화 시 적용
+                                    if autofit_enabled:
+                                        words = page.get_text("words")
+                                        matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
+                                        if matched:
+                                            fit_rect = matched[0]
+                                            for r in matched[1:]: fit_rect |= r
+
+                                    anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
+                                    
+                                    # 1. 기존 이미지 파일 삭제 (불필요한 용량 차지 방지)
+                                    if os.path.exists(anno['img_path']):
+                                        try: os.remove(anno['img_path'])
+                                        except: pass
+                                        
+                                    # 2. 캐시 갱신을 위해 새로운 파일명으로 이미지 다시 캡처 및 저장
+                                    st.session_state.crop_counter += 1
+                                    new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+                                    new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
+                                    page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(new_img_path)
+                                    
+                                    anno['img_name'] = new_img_name
+                                    anno['img_path'] = new_img_path
+                                    
+                                    # 3. 새로운 영역에 해당하는 텍스트 다시 추출
+                                    anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
+                                    
                                     modified = True
                 
                 # 조정을 마쳤다면 즉시 신규 모드로 자동 복귀
