@@ -119,7 +119,7 @@ if st.session_state.file_bytes:
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
-    # Fabric.js 객체 세팅 (상태 변경 시 이 객체만 부드럽게 갱신됩니다)
+    # Fabric.js 객체 세팅
     fabric_objects = []
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -153,7 +153,6 @@ if st.session_state.file_bytes:
                     st.session_state.selected_box_id = None
                     st.rerun()
 
-        # [핵심 수정] 캔버스 Key를 고정하여 Iframe 재생성(깜빡임) 방지
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -186,7 +185,6 @@ if st.session_state.file_bytes:
                                 n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                 n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                 
-                                # 마우스를 드래그 아웃(변경 발생) 했는지 확인
                                 if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
@@ -218,7 +216,6 @@ if st.session_state.file_bytes:
                     st.rerun()
 
             else:
-                # [신규 태깅 모드]
                 if len(objs) > len(fabric_objects):
                     new_obj = objs[-1]
                     obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
@@ -235,7 +232,6 @@ if st.session_state.file_bytes:
                         p_y1 = p_y0 + (h / pdf_to_canvas_ratio)
                         
                         if w < 10 and h < 10:
-                            # 1. 클릭 감지 (수정 모드 진입)
                             cx = (new_obj['left'] + w/2) / pdf_to_canvas_ratio
                             cy = (new_obj['top'] + h/2) / pdf_to_canvas_ratio
                             clicked_id = None
@@ -251,7 +247,6 @@ if st.session_state.file_bytes:
                                 st.rerun()
                             
                         elif w >= 10 and h >= 10:
-                            # 2. 정상 드래그 감지 (새 박스 추가)
                             page = doc.load_page(st.session_state.current_page)
                             fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
                             
@@ -322,7 +317,7 @@ if st.session_state.file_bytes:
                 curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
                 # =======================================================
-                # [핵심 수정] 4개의 버튼 레이아웃 배치 및 마크다운 생성 로직 추가
+                # 버튼 레이아웃 배치 및 마크다운 생성 로직 (오류 방지 적용)
                 # =======================================================
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
                 
@@ -333,18 +328,19 @@ if st.session_state.file_bytes:
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
-                # 3. 마크다운 추출 기능 생성
+                # 3. 마크다운 추출 기능 생성 (안전한 문자열 결합 방식)
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
                     md_text += f"### Page {a['page_idx'] + 1}\n"
                     md_text += f"- **BBox:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
-                    md_text += f"```text\n{a['text']}\n
-```\n\n---\n"
+                    md_text += "```text\n"
+                    md_text += str(a['text']) + "\n"
+                    md_text += "```\n\n---\n"
                 
                 c3.download_button("📝 마크다운 추출", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                # 4. JSON 추출 (기존 기능 유지)
+                # 4. JSON 추출
                 export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
