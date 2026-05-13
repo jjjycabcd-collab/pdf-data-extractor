@@ -73,6 +73,11 @@ uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", typ
 
 if uploaded_file is not None:
     if st.session_state.file_name != uploaded_file.name:
+        # [수정] 새 PDF 로드 시 이전 작업 찌꺼기 이미지들 일괄 삭제
+        for f in os.listdir(IMAGE_SAVE_DIR):
+            try: os.remove(os.path.join(IMAGE_SAVE_DIR, f))
+            except: pass
+            
         st.session_state.file_bytes = uploaded_file.read()
         st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
         st.session_state.file_name = uploaded_file.name
@@ -200,12 +205,10 @@ if st.session_state.file_bytes:
 
                                     anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
                                     
-                                    # 1. 기존 이미지 파일 삭제 (불필요한 용량 차지 방지)
-                                    if os.path.exists(anno['img_path']):
-                                        try: os.remove(anno['img_path'])
-                                        except: pass
-                                        
-                                    # 2. 캐시 갱신을 위해 새로운 파일명으로 이미지 다시 캡처 및 저장
+                                    # [수정] 잦은 렌더링 시 브라우저가 파일을 찾지 못하는 에러 방지를 위해,
+                                    # 드래그 중에 이전 파일을 강제 삭제하지 않고 남겨둠 (추후 초기화 시 일괄 정리)
+                                    
+                                    # 캐시 갱신을 위해 새로운 파일명으로 이미지 캡처 및 저장
                                     st.session_state.crop_counter += 1
                                     new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                     new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
@@ -214,12 +217,11 @@ if st.session_state.file_bytes:
                                     anno['img_name'] = new_img_name
                                     anno['img_path'] = new_img_path
                                     
-                                    # 3. 새로운 영역에 해당하는 텍스트 다시 추출
+                                    # 새로운 영역에 해당하는 텍스트 다시 추출
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     
                                     modified = True
                 
-                # 조정을 마쳤을 때, 우측 패널에서 갱신된 내역을 확인할 수 있도록 선택 상태(selected_box_id) 유지
                 if modified:
                     st.session_state.clear_trigger += 1
                     st.rerun()
@@ -290,9 +292,6 @@ if st.session_state.file_bytes:
     with right_col:
         st.subheader("데이터 추출 목록")
         if st.session_state.annotations:
-            # ========================================================
-            # 무한 루프 완벽 차단 로직: 첫 번째 항목에 '신규 모드' 강제 삽입
-            # ========================================================
             anno_dict = {a['id']: a for a in st.session_state.annotations}
             valid_ids = list(anno_dict.keys())
             radio_options = ["NEW_MODE"] + valid_ids
@@ -315,7 +314,6 @@ if st.session_state.file_bytes:
             selected_id = st.radio("목록", options=radio_options, format_func=format_label, index=idx, label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
             
-            # 사용자가 라디오 버튼을 클릭하여 상태를 변경했을 때만 실행됨 (무한루프 방어)
             if selected_id != current_val:
                 st.session_state.selected_box_id = None if selected_id == "NEW_MODE" else selected_id
                 if selected_id != "NEW_MODE":
@@ -326,7 +324,14 @@ if st.session_state.file_bytes:
             st.markdown("---")
             if st.session_state.selected_box_id in anno_dict:
                 curr_anno = anno_dict[st.session_state.selected_box_id]
-                st.image(curr_anno['img_path'], use_column_width=True)
+                
+                # [수정] 파일 경로를 직접 주지 않고 PIL 객체로 변환해서 출력하여 MediaFileStorageError 방지
+                if os.path.exists(curr_anno['img_path']):
+                    img_to_show = Image.open(curr_anno['img_path'])
+                    st.image(img_to_show, use_column_width=True)
+                else:
+                    st.warning("이미지 파일을 찾을 수 없습니다. 다시 드래그하여 영역을 갱신해 주세요.")
+
                 curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
                 c1, c2 = st.columns(2)
