@@ -12,12 +12,13 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# (숨김 처리하던 CSS는 제거하여 버튼이 화면에 잘 보이도록 변경했습니다)
-
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
-    'last_canvas_sig': None, 'file_name': ""
+    'last_canvas_sig': None, 'file_name': "",
+    # [신규] 라벨 관리 상태 추가
+    'labels': ['논문명', '저자명', '소속기관', '초록', '키워드'],
+    'active_label': '논문명'
 }
 
 for key, default in state_keys.items():
@@ -49,6 +50,12 @@ def delete_single_item(anno_id):
             break
     st.session_state.selected_box_id = None
 
+def update_label(aid):
+    for a in st.session_state.annotations:
+        if a['id'] == aid:
+            a['label'] = st.session_state[f"lbl_sel_{aid}"]
+            break
+
 def clean_text(text):
     if not text: return ""
     lines = text.split('\n')
@@ -66,7 +73,7 @@ def get_page_image(file_bytes, page_idx):
         return None, 0, 0
 
 # ==========================================
-# 3. 파일 로드 로직
+# 3. 사이드바 (파일 로드 및 라벨 관리)
 # ==========================================
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -93,12 +100,39 @@ else:
             st.session_state.pdf_doc = fitz.open(stream=st.session_state.file_bytes, filetype="pdf")
             st.session_state.file_name = "sample.pdf"
 
-# ==========================================
-# 4. 메인 에디터 화면
-# ==========================================
 if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
+
+    st.sidebar.markdown("---")
+    
+    # [신규] 사이드바 - 태깅할 대상 라벨 선택
+    st.session_state.active_label = st.sidebar.radio("📌 현재 태깅 라벨 (드래그 전 선택)", options=st.session_state.labels)
+    
+    # [신규] 사이드바 - 라벨 항목 추가/삭제 관리
+    with st.sidebar.expander("⚙️ 라벨 추가/삭제 관리", expanded=False):
+        new_lbl = st.text_input("새 라벨 이름")
+        if st.button("➕ 라벨 추가"):
+            if new_lbl and new_lbl not in st.session_state.labels:
+                st.session_state.labels.append(new_lbl)
+                st.rerun()
+                
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        del_lbl = st.selectbox("삭제할 라벨 선택", options=st.session_state.labels)
+        if st.button("🗑️ 라벨 삭제"):
+            if len(st.session_state.labels) > 1:
+                st.session_state.labels.remove(del_lbl)
+                # 삭제된 라벨이 활성 라벨이었다면 초기화
+                if st.session_state.active_label == del_lbl:
+                    st.session_state.active_label = st.session_state.labels[0]
+                # 기존에 해당 라벨로 태깅된 데이터 일괄 미지정 처리
+                for a in st.session_state.annotations:
+                    if a.get('label') == del_lbl:
+                        a['label'] = "미지정"
+                st.rerun()
+            else:
+                st.error("최소 1개의 라벨은 유지해야 합니다.")
 
     st.sidebar.markdown("---")
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
@@ -110,6 +144,9 @@ if st.session_state.file_bytes:
     st.sidebar.write(f"**파일:** {st.session_state.file_name}")
     st.sidebar.write(f"**페이지:** {st.session_state.current_page + 1} / {total_pages}")
 
+    # ==========================================
+    # 4. 메인 에디터 화면
+    # ==========================================
     full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
     if full_bg is None:
         st.error("PDF 페이지를 로드할 수 없습니다.")
@@ -145,7 +182,6 @@ if st.session_state.file_bytes:
     with left_col:
         st.write("### PDF 상호작용 구축 도구")
         
-        # [수정] 현재 모드에 따라 버튼 명칭이 'Modify <-> Drag' 로 변환되도록 설정
         if tag_mode == "transform":
             btn_label = "🔄 현재: Modify 모드 (클릭하여 Drag 모드로 복귀)"
         else:
@@ -185,7 +221,6 @@ if st.session_state.file_bytes:
                                 n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                 n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                 
-                                # 변경 사항이 감지되면 (버튼을 누르는 순간에도 이 로직이 먼저 실행되어 최신 상태 저장)
                                 if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
@@ -213,7 +248,6 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                # 버튼(Modify <-> Drag)을 클릭했다면 선택을 해제하여 신규 모드로 복귀
                 if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
@@ -221,7 +255,6 @@ if st.session_state.file_bytes:
                     st.rerun()
 
             else:
-                # Drag 모드일 때 버튼을 눌러도 초기화되도록 안전장치 마련
                 if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
@@ -273,11 +306,14 @@ if st.session_state.file_bytes:
                             page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(img_path)
                             
                             anno_id = f"id_{st.session_state.crop_counter}"
+                            
+                            # [신규] 태깅되는 순간, 현재 활성화된 라벨 속성(label)을 부여하여 저장
                             st.session_state.annotations.append({
                                 'id': anno_id, 'page_idx': st.session_state.current_page,
                                 'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                 'text': clean_text(page.get_text("text", clip=fit_rect)),
-                                'img_name': img_name, 'img_path': img_path
+                                'img_name': img_name, 'img_path': img_path,
+                                'label': st.session_state.active_label
                             })
                             
                             st.session_state.selected_box_id = None
@@ -298,8 +334,10 @@ if st.session_state.file_bytes:
                     return "✨ [신규 태깅 모드] 빈 공간을 드래그하세요"
                 a = anno_dict[aid]
                 r = a['pdf_rect']
+                lbl = a.get('label', '미지정')
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + ", W:" + str(int(r[2]-r[0])) + ", H:" + str(int(r[3]-r[1])) + "]"
-                return "[P" + str(a['page_idx']+1) + "] " + coords + " | " + a['text'][:20].replace('\n', ' ') + "..."
+                # [수정] 목록에 라벨 항목 노출
+                return f"[P{a['page_idx']+1}] [{lbl}] {coords} | " + a['text'][:15].replace('\n', ' ') + "..."
 
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in valid_ids else "NEW_MODE"
             idx = radio_options.index(current_val)
@@ -324,6 +362,12 @@ if st.session_state.file_bytes:
                 else:
                     st.warning("이미지 파일을 찾을 수 없습니다. 다시 드래그하여 영역을 갱신해 주세요.")
 
+                # [신규] 우측 패널에서 이미 그려진 박스의 라벨을 동적으로 수정하는 기능
+                curr_lbl = curr_anno.get('label', '미지정')
+                lbl_idx = st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0
+                st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, 
+                             key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
+
                 curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
 
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
@@ -333,18 +377,22 @@ if st.session_state.file_bytes:
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
+                # 마크다운 추출 시 라벨 정보 포함
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
+                    lbl = a.get('label', '미지정')
                     md_text += "### Page " + str(a['page_idx'] + 1) + "\n"
-                    md_text += "- **BBox:** `[X: " + str(int(r[0])) + ", Y: " + str(int(r[1])) + ", W: " + str(int(r[2]-r[0])) + ", H: " + str(int(r[3]-r[1])) + "]`\n"
+                    md_text += "- **라벨 (Label):** `" + lbl + "`\n"
+                    md_text += "- **좌표 (BBox):** `[X: " + str(int(r[0])) + ", Y: " + str(int(r[1])) + ", W: " + str(int(r[2]-r[0])) + ", H: " + str(int(r[3]-r[1])) + "]`\n"
                     md_text += chr(96) + chr(96) + chr(96) + "text\n"
                     md_text += str(a['text']) + "\n"
                     md_text += chr(96) + chr(96) + chr(96) + "\n\n---\n"
                 
                 c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                export_data = [{"page": a['page_idx']+1, "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
+                # JSON 추출 시 라벨 정보 포함
+                export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
         else:
@@ -364,7 +412,6 @@ doc.addEventListener('keydown', function(e) {
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '다음 ▶');
         if (btn) btn.click();
     } else if (e.key === 'Escape') {
-        // [수정] 바뀐 명칭(mode_toggle)의 버튼을 찾아 클릭하도록 처리해 혹시나 포커스가 살아있을 때 대비
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
         if (btn) btn.click();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
