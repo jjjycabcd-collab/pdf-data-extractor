@@ -12,13 +12,17 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# [수정] 표준 CSS 문법(has, title)을 사용하여 상단 숨김 버튼들을 화면에서 완벽하게 제거
+# 숨김 버튼 제거 및 숫자 입력창 스타일 조정 CSS
 st.markdown(
     """
     <style>
     button[title^="hidden"] { display: none !important; }
     div[data-testid="stButton"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
     div[data-testid="stTooltipHoverTarget"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
+    
+    div[data-testid="stNumberInputStepUp"], div[data-testid="stNumberInputStepDown"] { display: none !important; }
+    input[type="number"] { -moz-appearance: textfield; text-align: center !important; font-weight: bold; }
+    input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     </style>
     """,
     unsafe_allow_html=True
@@ -32,7 +36,7 @@ state_keys = {
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
-    'redraw_trigger': 0  # [신규] 박스 삭제 시 캔버스 화면이 전부 날아가는 버그 방지용
+    'redraw_trigger': 0
 }
 
 for key, default in state_keys.items():
@@ -62,6 +66,12 @@ def go_last(total_pages):
     st.session_state.current_page = max(0, total_pages - 1)
     st.session_state.selected_box_id = None
 
+def page_input_changed():
+    target = st.session_state.page_input_widget - 1
+    if target != st.session_state.current_page:
+        st.session_state.current_page = target
+        st.session_state.selected_box_id = None
+
 def delete_single_item(anno_id):
     for i, a in enumerate(st.session_state.annotations):
         if a['id'] == anno_id:
@@ -71,7 +81,7 @@ def delete_single_item(anno_id):
             st.session_state.annotations.pop(i)
             break
     st.session_state.selected_box_id = None
-    st.session_state.redraw_trigger += 1  # 삭제 시 화면을 안전하게 재구성
+    st.session_state.redraw_trigger += 1
 
 def update_label(aid):
     for a in st.session_state.annotations:
@@ -81,6 +91,26 @@ def update_label(aid):
 
 def set_active_label(lbl):
     st.session_state.active_label = lbl
+
+def handle_esc():
+    st.session_state.selected_box_id = None
+
+def add_label_callback():
+    new_lbl = st.session_state.get('new_lbl_input', '').strip()
+    if new_lbl and new_lbl not in st.session_state.labels:
+        st.session_state.labels.append(new_lbl)
+    st.session_state.new_lbl_input = ""
+
+def delete_label_callback():
+    del_target = st.session_state.get('del_lbl_select')
+    if del_target and len(st.session_state.labels) > 1:
+        if del_target in st.session_state.labels:
+            st.session_state.labels.remove(del_target)
+            if st.session_state.active_label == del_target:
+                st.session_state.active_label = st.session_state.labels[0]
+            for a in st.session_state.annotations:
+                if a.get('label') == del_target:
+                    a['label'] = "미지정"
 
 def clean_text(text):
     if not text: return ""
@@ -142,28 +172,15 @@ if st.session_state.file_bytes:
     st.session_state.active_label = st.sidebar.radio("📌 현재 태깅 라벨 (드래그 전 선택)", options=st.session_state.labels, index=active_idx)
     
     with st.sidebar.expander("⚙️ 라벨 추가/삭제 관리", expanded=False):
-        new_lbl = st.text_input("새 라벨 이름")
-        if st.button("➕ 라벨 추가"):
-            if new_lbl and new_lbl not in st.session_state.labels:
-                st.session_state.labels.append(new_lbl)
-                st.rerun()
+        st.text_input("새 라벨 이름", key="new_lbl_input")
+        st.button("➕ 라벨 추가", on_click=add_label_callback)
                 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        del_lbl = st.selectbox("삭제할 라벨 선택", options=st.session_state.labels)
-        
-        # [수정] 오작동 방지를 위해 이름 변경 (JS 단축키 이벤트와 충돌 방지)
-        if st.button("🗑️ 항목 삭제"):
-            if len(st.session_state.labels) > 1:
-                st.session_state.labels = [lbl for lbl in st.session_state.labels if lbl != del_lbl]
-                if st.session_state.active_label == del_lbl:
-                    st.session_state.active_label = st.session_state.labels[0]
-                for a in st.session_state.annotations:
-                    if a.get('label') == del_lbl:
-                        a['label'] = "미지정"
-                st.rerun()
-            else:
-                st.error("최소 1개의 라벨은 유지해야 합니다.")
+        st.selectbox("삭제할 라벨 선택", options=st.session_state.labels, key="del_lbl_select")
+        if len(st.session_state.labels) <= 1:
+            st.warning("최소 1개의 라벨은 유지해야 합니다.")
+        st.button("🗑️ 선택한 항목 삭제", on_click=delete_label_callback, disabled=(len(st.session_state.labels) <= 1))
 
     st.sidebar.markdown("---")
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
@@ -204,27 +221,40 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        st.write("### PDF 상호작용 구축 도구")
-        
-        # [수정] 단축키용 숨김 버튼 (도구 상단에 보이지 않게 처리됨)
-        for i, lbl in enumerate(st.session_state.labels):
-            if i < 9:
-                st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,), help=f"hidden_lbl_{i+1}")
-        esc_pressed = st.button("HE", key="btn_shortcut_esc", help="hidden_esc")
+        # ====================================================
+        # [신규] 상단 온라인 도움말
+        # ====================================================
+        with st.expander("💡 온라인 도움말 및 사용 가이드 (클릭하여 펼치기)", expanded=False):
+            st.markdown("""
+            **1. 기본 조작 및 라벨 관리**
+            - 좌측 사이드바에서 PDF 파일을 업로드하고, 태깅할 데이터의 속성(라벨)을 선택하거나 새로 추가/삭제할 수 있습니다.
+            
+            **2. 태깅 모드 가이드**
+            - **Drag 모드:** 문서의 빈 공간을 마우스로 드래그하면 새로운 박스가 그려지고 데이터가 추출됩니다. (그리기 전 좌측에서 라벨을 먼저 선택하세요)
+            - **Modify 모드:** 이미 그려진 박스를 클릭하면 수정 모드가 됩니다. 크기나 위치를 조절한 뒤, 빈 공간을 클릭하거나 `ESC` 키를 누르면 수정사항이 저장되고 다시 Drag 모드로 복귀합니다.
+            
+            **3. ⌨️ 작업 효율을 높이는 단축키**
+            - `Ctrl + 1~9` : 작업 중 마우스 이동 없이 태깅할 라벨을 즉시 변경합니다. (**Ctrl 키를 꾹 누르고 있으면** 화면 중앙에 지정된 숫자 단축키 안내창이 나타납니다.)
+            - `◀` / `▶` : 이전 페이지 / 다음 페이지로 이동합니다.
+            - `Delete` 또는 `Backspace` : 현재 선택된 박스를 즉시 삭제합니다.
+            - `ESC` : 수정 중인 작업을 취소하고 Drag 모드로 강제 복귀합니다.
+            
+            **4. 데이터 출력**
+            - 모든 태깅 작업이 끝나면 우측 하단의 버튼을 통해 메타데이터를 **마크다운(.md)** 또는 **JSON** 형식으로 다운로드할 수 있습니다.
+            """)
 
-        ctrl_cols = st.columns([1, 1, 1, 1, 5, 2])
+        st.write("### PDF 상호작용 구축 도구")
+
+        ctrl_cols = st.columns([1.2, 1.2, 2, 1.2, 1.2, 2])
         ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
         ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True, help="이전 페이지")
-        ctrl_cols[2].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
-        ctrl_cols[3].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True, help="마지막 페이지")
         
-        new_page = ctrl_cols[4].slider("페이지 이동", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, label_visibility="collapsed")
-        ctrl_cols[5].markdown(f"<div style='text-align: right; padding-top: 5px;'><b>{st.session_state.current_page + 1} / {total_pages}</b></div>", unsafe_allow_html=True)
+        ctrl_cols[2].number_input("페이지 입력", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, on_change=page_input_changed, key="page_input_widget", label_visibility="collapsed")
         
-        if new_page - 1 != st.session_state.current_page:
-            st.session_state.current_page = new_page - 1
-            st.session_state.selected_box_id = None
-            st.rerun()
+        ctrl_cols[3].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
+        ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True, help="마지막 페이지")
+        
+        ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
         st.markdown("---")
         
@@ -235,7 +265,6 @@ if st.session_state.file_bytes:
             
         mode_toggle_pressed = st.button(btn_label, help="mode_toggle")
 
-        # [수정] 박스 삭제 시 캔버스가 전부 날아가는 현상 방지를 위해 redraw_trigger 적용
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
             stroke_width=2,
@@ -292,14 +321,14 @@ if st.session_state.file_bytes:
                                     anno['text'] = clean_text(page.get_text("text", clip=fit_rect))
                                     modified = True
                 
-                if mode_toggle_pressed or esc_pressed:
+                if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
                 elif modified:
                     st.rerun()
 
             else:
-                if mode_toggle_pressed or esc_pressed:
+                if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
                     st.rerun()
                 
@@ -412,7 +441,6 @@ if st.session_state.file_bytes:
 
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
                 
-                # [수정] 박스 삭제 버튼 (이 버튼만이 정확히 '🗑️ 삭제'라는 이름을 가집니다)
                 c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
                 
                 if c2.button("💾 저장"):
@@ -438,6 +466,24 @@ if st.session_state.file_bytes:
             st.info("왼쪽 뷰어에서 영역을 드래그하여 태깅을 시작하세요.")
 
 # ==========================================
+# 5. 숨김 버튼 마커 및 JS 연동
+# ==========================================
+st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+    div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+for i, lbl in enumerate(st.session_state.labels):
+    if i < 9:
+        st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
+st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
+
+# ==========================================
 # 6. JavaScript 단축키 연동 및 가이드 오버레이
 # ==========================================
 shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키 1~9)</b></div>"
@@ -452,7 +498,6 @@ components.html(f"""
 const doc = window.parent.document;
 const currentMode = "{tag_mode}";
 
-// Ctrl 오버레이 DOM 생성
 let overlay = doc.getElementById('shortcut-overlay');
 if (!overlay) {{
     overlay = doc.createElement('div');
@@ -488,13 +533,12 @@ doc._my_keydown_listener = function(e) {{
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
         if (btn) btn.click();
     }} else if (e.key === 'Escape') {{
-        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
+        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Modify 모드') || el.innerText.includes('Drag 모드'));
         if (btn_toggle) btn_toggle.click();
         
-        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
+        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === 'HE_ESC');
         if (btn_esc) btn_esc.click();
     }} else if (e.key === 'Delete' || e.key === 'Backspace') {{
-        // [오류수정 핵심] 정확히 '🗑️ 삭제' 텍스트만 일치하는 버튼을 찾아 좌측 항목 삭제 버튼과의 충돌 원천 차단
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.trim() === '🗑️ 삭제');
         if (btn) btn.click();
     }} else if (e.key === 'Control') {{
@@ -502,7 +546,12 @@ doc._my_keydown_listener = function(e) {{
             overlay.style.display = 'block';
         }}
     }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_lbl_' + e.key);
+        if (e.ctrlKey) {{
+            e.preventDefault();
+        }}
+        const index = parseInt(e.key) - 1;
+        const targetText = 'HL_' + index;
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === targetText);
         if (btn) btn.click();
     }}
 }};
