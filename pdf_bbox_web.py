@@ -12,24 +12,24 @@ from streamlit_drawable_canvas import st_canvas
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# 화면에 보이지 않아야 할 숨김 버튼들(ESC, 단축키 처리용)을 감추는 CSS
+# CSS를 통한 강제 숨김 처리 (JS와 이중으로 숨겨 노출 원천 차단)
 st.markdown(
     """
     <style>
-    button[title="hidden_esc"], button[title="shortcut_btn"] { display: none !important; }
-    div:has(> button[title="hidden_esc"]), div:has(> button[title="shortcut_btn"]) { display: none !important; margin: 0 !important; padding: 0 !important; height: 0 !important; }
+    div[data-testid="stButton"] > button:contains("[HIDDEN]") { display: none !important; }
     </style>
     """,
     unsafe_allow_html=True
 )
 
+if 'labels' not in st.session_state:
+    st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드']
+
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
     'last_canvas_sig': None, 'file_name': "",
-    # 초기 라벨 리스트 (복사본 생성으로 참조 버그 원천 차단)
-    'labels': ['논문명', '저자명', '소속기관', '초록', '키워드'].copy(),
-    'active_label': '논문명'
+    'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명'
 }
 
 for key, default in state_keys.items():
@@ -128,7 +128,7 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     
-    # 라벨 인덱스 싱크 맞추기 (단축키 등으로 상태가 변했을 때 UI 반영)
+    # 활성 라벨 인덱스 연동
     try:
         active_idx = st.session_state.labels.index(st.session_state.active_label)
     except ValueError:
@@ -141,19 +141,25 @@ if st.session_state.file_bytes:
         new_lbl = st.text_input("새 라벨 이름")
         if st.button("➕ 라벨 추가"):
             if new_lbl and new_lbl not in st.session_state.labels:
-                st.session_state.labels = st.session_state.labels + [new_lbl]
+                st.session_state.labels.append(new_lbl)
                 st.rerun()
                 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        del_lbl = st.selectbox("삭제할 라벨 선택", options=st.session_state.labels)
+        # [버그 수정] 단일 라벨 삭제가 완벽하게 작동하도록 상태 변경 로직 보완
+        del_lbl = st.selectbox("삭제할 라벨 선택", options=st.session_state.labels, key="del_lbl_selector")
         if st.button("🗑️ 라벨 삭제"):
             if len(st.session_state.labels) > 1:
-                # [버그 수정] 삭제 대상만 제외하고 새로운 리스트를 명시적으로 재할당하여 싹 지워지는 문제 해결
-                st.session_state.labels = [lbl for lbl in st.session_state.labels if lbl != del_lbl]
+                if del_lbl in st.session_state.labels:
+                    st.session_state.labels.remove(del_lbl)
+                    # 리스트를 새로 복사 할당하여 Streamlit이 변경을 확실히 감지하게 함
+                    st.session_state.labels = st.session_state.labels[:]
                 
+                # 삭제된 라벨이 활성 라벨이었다면 첫 번째 라벨로 변경
                 if st.session_state.active_label == del_lbl:
                     st.session_state.active_label = st.session_state.labels[0]
+                
+                # 기존에 해당 라벨로 태깅된 데이터 일괄 미지정 처리
                 for a in st.session_state.annotations:
                     if a.get('label') == del_lbl:
                         a['label'] = "미지정"
@@ -202,12 +208,12 @@ if st.session_state.file_bytes:
     with left_col:
         st.write("### PDF 상호작용 구축 도구")
         
-        # [신규] 단축키 처리를 위한 숨김 버튼 생성 (자바스크립트가 클릭할 대상)
+        # [수정] 단축키 연동을 위한 숨김 버튼 (JS에서 강제 숨김 처리됨)
+        # 클래스명과 텍스트로 쉽게 찾을 수 있도록 "[HIDDEN]" 키워드 삽입
         for i, lbl in enumerate(st.session_state.labels):
             if i < 9:
-                st.button(f"hidden_lbl_{i+1}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,), help="shortcut_btn")
-        
-        esc_pressed = st.button("ESC", help="hidden_esc")
+                st.button(f"[HIDDEN]_LBL_{i+1}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
+        esc_pressed = st.button("[HIDDEN]_ESC", key="btn_shortcut_esc")
 
         ctrl_cols = st.columns([1, 1, 1, 1, 5, 2])
         ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
@@ -230,7 +236,7 @@ if st.session_state.file_bytes:
         else:
             btn_label = "🖱️ 현재: Drag 모드 (기존 박스를 클릭하면 Modify 모드)"
             
-        mode_toggle_pressed = st.button(btn_label, help="mode_toggle")
+        mode_toggle_pressed = st.button(btn_label, key="btn_mode_toggle")
 
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.1)",
@@ -438,8 +444,8 @@ if st.session_state.file_bytes:
 # ==========================================
 # 6. JavaScript 단축키 연동 및 가이드 오버레이
 # ==========================================
-# 자바스크립트로 주입할 가이드 오버레이 HTML을 안전하게 한 줄로 생성
-shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키)</b></div>"
+# 자바스크립트로 주입할 가이드 오버레이 HTML 생성
+shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키 1~9)</b></div>"
 shortcut_html += "<div style='display:grid; grid-template-columns: 40px auto; gap: 8px 15px; font-size:1.1em;'>"
 for i, lbl in enumerate(st.session_state.labels):
     if i < 9:
@@ -451,7 +457,18 @@ components.html(f"""
 const doc = window.parent.document;
 const currentMode = "{tag_mode}";
 
-// Ctrl 가이드용 팝업(오버레이) DOM 생성
+// 1. [HIDDEN] 텍스트가 포함된 버튼의 부모 요소(div)를 완벽하게 강제 숨김 처리
+setInterval(() => {{
+    const btns = Array.from(doc.querySelectorAll('button'));
+    btns.forEach(b => {{
+        if (b.innerText.includes('[HIDDEN]')) {{
+            const container = b.closest('div[data-testid="stButton"]');
+            if (container) container.style.display = 'none';
+        }}
+    }});
+}}, 50);
+
+// 2. Ctrl 오버레이 DOM 생성
 let overlay = doc.getElementById('shortcut-overlay');
 if (!overlay) {{
     overlay = doc.createElement('div');
@@ -467,18 +484,21 @@ if (!overlay) {{
     overlay.style.zIndex = '9999';
     overlay.style.display = 'none';
     overlay.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
-    overlay.style.pointerEvents = 'none'; // 마우스 클릭 방해 금지
+    overlay.style.pointerEvents = 'none';
     doc.body.appendChild(overlay);
 }}
 overlay.innerHTML = "{shortcut_html}";
 
-// 중복 이벤트 부착을 방지하기 위해 기존 리스너 제거 후 새로 등록
+// 3. 기존 이벤트 리스너 제거 및 신규 부착 (중복 방지)
 if (doc._my_keydown_listener) {{
     doc.removeEventListener('keydown', doc._my_keydown_listener);
     doc.removeEventListener('keyup', doc._my_keyup_listener);
 }}
 
 doc._my_keydown_listener = function(e) {{
+    // 텍스트 입력창에서 입력할 때는 단축키 무시
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+
     if (e.key === 'ArrowLeft') {{
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀');
         if (btn) btn.click();
@@ -486,33 +506,29 @@ doc._my_keydown_listener = function(e) {{
         const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
         if (btn) btn.click();
     }} else if (e.key === 'Escape') {{
-        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'mode_toggle');
+        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Modify 모드') || el.innerText.includes('Drag 모드'));
         if (btn_toggle) btn_toggle.click();
         
-        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.title === 'hidden_esc');
+        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '[HIDDEN]_ESC');
         if (btn_esc) btn_esc.click();
     }} else if (e.key === 'Delete' || e.key === 'Backspace') {{
-        if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {{
-            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
-            if (btn) btn.click();
-        }}
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('삭제'));
+        if (btn) btn.click();
     }} else if (e.key === 'Control') {{
-        // 드래그 모드(rect)일 때 Ctrl을 누르면 오버레이 노출
+        // Ctrl 누를 때 오버레이 표시
         if (currentMode !== 'transform') {{
             overlay.style.display = 'block';
         }}
     }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
-        // 숫자키 1~9 입력 시, 라벨 변경 버튼 클릭 (입력창 포커스 중일 땐 예외 처리)
-        if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {{
-            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === 'hidden_lbl_' + e.key);
-            if (btn) btn.click();
-        }}
+        // 숫자 1~9 입력 시, 해당 숨김 라벨 버튼 클릭
+        const targetText = '[HIDDEN]_LBL_' + e.key;
+        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === targetText);
+        if (btn) btn.click();
     }}
 }};
 
 doc._my_keyup_listener = function(e) {{
     if (e.key === 'Control') {{
-        // Ctrl에서 손을 떼면 가이드 창 사라짐
         overlay.style.display = 'none';
     }}
 }};
