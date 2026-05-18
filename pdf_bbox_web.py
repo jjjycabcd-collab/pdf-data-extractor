@@ -6,13 +6,10 @@ import os
 import io
 import re
 import shutil
-import difflib  # 텍스트 비교 라이브러리 추가
+import difflib
 import pytesseract
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
-
-# Windows 환경 등에서 Tesseract 경로를 못 찾을 경우 아래 주석을 풀고 설치 경로를 지정해주세요.
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # ==========================================
 # 1. 페이지 및 상태 초기화
@@ -42,7 +39,8 @@ state_keys = {
     'annotations': [], 'crop_counter': 0, 'selected_box_id': None,
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
-    'redraw_trigger': 0
+    'redraw_trigger': 0,
+    'ocr_lang': 'kor+eng' # 기본 OCR 언어 세팅
 }
 
 for key, default in state_keys.items():
@@ -182,12 +180,11 @@ def clean_text(text):
             cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
 
-def extract_text_via_ocr(img_path):
+# [수정] OCR 추출 시 언어(lang) 파라미터를 동적으로 받도록 변경
+def extract_text_via_ocr(img_path, lang):
     try:
-        # 이미지 전처리: 흑백(Grayscale) 변환으로 노이즈 감소 및 가독성 확보
         img = Image.open(img_path).convert('L')
-        # 한글('kor') 단독 지정 및 psm 6(단일 텍스트 블록 간주) 옵션 세팅
-        ocr_text = pytesseract.image_to_string(img, lang='kor', config='--psm 6')
+        ocr_text = pytesseract.image_to_string(img, lang=lang, config='--psm 6')
         return clean_text(ocr_text)
     except Exception as e:
         return f"[OCR 에러: Tesseract가 설치되어 있는지 확인하세요]\n{str(e)}"
@@ -255,6 +252,16 @@ if st.session_state.file_bytes:
         st.button("🗑️ 선택한 항목 삭제", on_click=delete_label_callback, disabled=(len(st.session_state.labels) <= 1))
 
     st.sidebar.markdown("---")
+    
+    # [신규] OCR 언어 선택 메뉴 추가
+    ocr_lang_display = st.sidebar.selectbox(
+        "🌐 OCR 인식 언어 설정", 
+        ["kor+eng (한/영 혼용)", "kor (한국어 전용)", "eng (영어 전용)"], 
+        index=0,
+        help="추출 대상 텍스트의 주 언어를 선택하세요. (문서 언어에 맞게 설정해야 정확도가 올라갑니다)"
+    )
+    st.session_state.ocr_lang = ocr_lang_display.split(" ")[0]
+    
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
 
     # ==========================================
@@ -329,7 +336,6 @@ if st.session_state.file_bytes:
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             
-            # [기존 박스 수정(Transform) 블록]
             if tag_mode == "transform":
                 modified = False
                 for obj in objs:
@@ -363,15 +369,14 @@ if st.session_state.file_bytes:
                                     st.session_state.crop_counter += 1
                                     new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                     new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
-                                    
-                                    # 크롭 이미지 저장 해상도를 4배로 키워 텍스트 왜곡 방지
                                     page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(new_img_path)
                                     
                                     anno['img_name'] = new_img_name
                                     anno['img_path'] = new_img_path
                                     
                                     basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
-                                    ocr_text = extract_text_via_ocr(new_img_path)
+                                    # 언어 설정을 동적으로 주입
+                                    ocr_text = extract_text_via_ocr(new_img_path, st.session_state.ocr_lang)
                                     
                                     anno['text'] = basic_text
                                     anno['ocr_text'] = ocr_text
@@ -384,7 +389,6 @@ if st.session_state.file_bytes:
                 elif modified:
                     st.rerun()
 
-            # [신규 박스 생성(Drag) 블록]
             else:
                 if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
@@ -434,11 +438,11 @@ if st.session_state.file_bytes:
                             img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                             img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
                             
-                            # 크롭 이미지 저장 해상도를 4배로 키워 텍스트 왜곡 방지
                             page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(img_path)
                             
                             basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
-                            ocr_text = extract_text_via_ocr(img_path)
+                            # 언어 설정을 동적으로 주입
+                            ocr_text = extract_text_via_ocr(img_path, st.session_state.ocr_lang)
                             
                             anno_id = f"id_{st.session_state.crop_counter}"
                             st.session_state.annotations.append({
@@ -507,7 +511,15 @@ if st.session_state.file_bytes:
                     st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
                 with col_o:
                     st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
-                    st.button("⬇️ OCR 추출 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
+                    
+                    # [신규] 버튼을 2개로 나누어 재인식 기능 추가
+                    c_btn1, c_btn2 = st.columns([6, 4])
+                    c_btn1.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
+                    
+                    if c_btn2.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True, help="사이드바의 언어 설정으로 OCR을 다시 수행합니다."):
+                        # 클릭 시 현재 이미지 경로와, 사이드바에서 선택된 최신 언어 코드로 다시 추출
+                        curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang)
+                        st.rerun()
 
                 st.markdown("##### 💡 두 추출 결과 차이점 (기본 vs OCR)")
                 diff_html = get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))
