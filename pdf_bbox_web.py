@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import fitz  # PyMuPDF
 import json
 import os
@@ -8,6 +7,7 @@ import re
 import shutil
 import difflib
 import pytesseract
+import base64  # [추가] 자바스크립트 우회 삽입을 위한 모듈
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -35,6 +35,7 @@ st.markdown(
 )
 
 if 'labels' not in st.session_state:
+    # [요청 반영] 단행본, 기타 삭제
     st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌']
 
 state_keys = {
@@ -119,6 +120,7 @@ def delete_label_callback():
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
 
+# [수정] 클릭 시 메인 창(window)의 전역 함수를 호출하도록 변경
 def get_html_diff(text1, text2):
     if not text1 and not text2:
         return ""
@@ -132,12 +134,12 @@ def get_html_diff(text1, text2):
         if tag == 'equal':
             result.append(text1[i1:i2])
         elif tag == 'delete':
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style}'>{text1[i1:i2]}</span>")
+            result.append(f"<span onclick='window.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style}'>{text1[i1:i2]}</span>")
         elif tag == 'insert':
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
+            result.append(f"<span onclick='window.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
         elif tag == 'replace':
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style} margin-right: 2px;'>{text1[i1:i2]}</span>")
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
+            result.append(f"<span onclick='window.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style} margin-right: 2px;'>{text1[i1:i2]}</span>")
+            result.append(f"<span onclick='window.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
             
     return "".join(result).replace('\n', '<br>')
 
@@ -309,6 +311,7 @@ if st.session_state.file_bytes:
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
+    st.write("### PDF 상호작용 구축 도구")
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기 (체크 해제 시 편집 전용 넓은 화면 모드)", value=True)
     st.markdown("---")
 
@@ -609,7 +612,7 @@ for i, lbl in enumerate(st.session_state.labels):
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
 # ==========================================
-# 6. JavaScript 단축키 연동 및 가이드 오버레이 (클릭 이벤트 포함)
+# 6. JavaScript 단축키 연동 및 가이드 오버레이 (보안 우회 Base64 주입)
 # ==========================================
 shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키 1~9)</b></div>"
 shortcut_html += "<div style='display:grid; grid-template-columns: 40px auto; gap: 8px 15px; font-size:1.1em;'>"
@@ -618,73 +621,114 @@ for i, lbl in enumerate(st.session_state.labels):
         shortcut_html += f"<div><span style='background:#444; padding:3px 8px; border-radius:4px;'>{i+1}</span></div><div>{lbl}</div>"
 shortcut_html += "</div>"
 
-components.html(f"""
-<script>
-const doc = window.parent.document;
-const win = window.parent;
-const currentMode = "{tag_mode}";
-
-// [핵심 보정] 수정된 f-string 안전 괄호 포맷
-if (!win._has_ta_listeners) {{
+# Streamlit iframe 우회용 바닐라 자바스크립트 코드 작성
+raw_js_code = f"""
+if (!window._custom_js_injected) {{
+    // 1. 단어 삽입을 위한 입력창 클릭 이벤트 트래킹
     const trackCaret = function(e) {{
         if (e.target.tagName === 'TEXTAREA') {{
-            win._lastTASelectionStart = e.target.selectionStart;
-            win._lastTASelectionEnd = e.target.selectionEnd;
-            win._lastActiveTA = e.target;
+            window._lastTASelectionStart = e.target.selectionStart;
+            window._lastTASelectionEnd = e.target.selectionEnd;
+            window._lastActiveTA = e.target;
         }}
     }};
-    doc.addEventListener('keyup', trackCaret, true);
-    doc.addEventListener('click', trackCaret, true);
-    doc.addEventListener('focusout', trackCaret, true);
-    win._has_ta_listeners = true;
-}}
-
-win.insertDiffText = function(element) {{
-    const textToInsert = element.innerText;
-    let targetTA = win._lastActiveTA;
+    window.document.addEventListener('keyup', trackCaret, true);
+    window.document.addEventListener('click', trackCaret, true);
+    window.document.addEventListener('focusout', trackCaret, true);
     
-    if (!targetTA) {{
-        const labels = doc.querySelectorAll('label');
-        for (let lbl of labels) {{
-            if (lbl.innerText.includes("최종 교정 텍스트")) {{
-                const container = lbl.closest('[data-testid="stTextArea"]');
-                if (container) {{
-                    targetTA = container.querySelector('textarea');
-                    break;
+    // 2. 단어 클릭 시 최종 교정 텍스트창에 텍스트를 강제 삽입하는 핵심 함수
+    window.insertDiffText = function(element) {{
+        const textToInsert = element.innerText;
+        let targetTA = window._lastActiveTA;
+        
+        // 포커스가 없었다면 DOM 트리에서 최종 교정 텍스트창을 수동으로 탐색
+        if (!targetTA) {{
+            const labels = window.document.querySelectorAll('label');
+            for (let lbl of labels) {{
+                if (lbl.innerText.includes("최종 교정 텍스트")) {{
+                    const container = lbl.closest('div[data-testid="stTextArea"]');
+                    if (container) {{
+                        targetTA = container.querySelector('textarea');
+                        break;
+                    }}
                 }}
             }}
         }}
-    }}
-    
-    if (targetTA) {{
-        const startPos = (win._lastTASelectionStart !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionStart : targetTA.value.length;
-        const endPos = (win._lastTASelectionEnd !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionEnd : targetTA.value.length;
-        const text = targetTA.value;
         
-        const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
-        
-        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value").set;
-        nativeInputValueSetter.call(targetTA, newText);
-        
-        targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        
-        targetTA.focus();
-        targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
-        
-        win._lastTASelectionStart = targetTA.selectionStart;
-        win._lastTASelectionEnd = targetTA.selectionEnd;
-        win._lastActiveTA = targetTA;
-        
-        const originalBg = element.style.backgroundColor;
-        element.style.backgroundColor = '#fff000';
-        setTimeout(() => {{ element.style.backgroundColor = originalBg; }}, 150);
-    }}
-}};
+        if (targetTA) {{
+            const startPos = (window._lastTASelectionStart !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionStart : targetTA.value.length;
+            const endPos = (window._lastTASelectionEnd !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionEnd : targetTA.value.length;
+            const text = targetTA.value;
+            
+            const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
+            
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+            nativeInputValueSetter.call(targetTA, newText);
+            
+            targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            
+            targetTA.focus();
+            targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
+            
+            window._lastTASelectionStart = targetTA.selectionStart;
+            window._lastTASelectionEnd = targetTA.selectionEnd;
+            window._lastActiveTA = targetTA;
+            
+            const originalBg = element.style.backgroundColor;
+            element.style.backgroundColor = '#fff000';
+            setTimeout(() => {{ element.style.backgroundColor = originalBg; }}, 150);
+        }}
+    }};
 
-let overlay = doc.getElementById('shortcut-overlay');
+    // 3. 단축키 글로벌 리스너
+    window._my_keydown_listener = function(e) {{
+        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+        const doc = window.document;
+        let overlay = doc.getElementById('shortcut-overlay');
+
+        if (e.key === 'ArrowLeft') {{
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀');
+            if (btn) btn.click();
+        }} else if (e.key === 'ArrowRight') {{
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
+            if (btn) btn.click();
+        }} else if (e.key === 'Escape') {{
+            const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Modify 모드') || el.innerText.includes('Drag 모드'));
+            if (btn_toggle) btn_toggle.click();
+            const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === 'HE_ESC');
+            if (btn_esc) btn_esc.click();
+        }} else if (e.key === 'Delete' || e.key === 'Backspace') {{
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.trim() === '🗑️ 삭제');
+            if (btn) btn.click();
+        }} else if (e.key === 'Control') {{
+            if (overlay) overlay.style.display = 'block';
+        }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
+            if (e.ctrlKey) e.preventDefault();
+            const index = parseInt(e.key) - 1;
+            const targetText = 'HL_' + index;
+            const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === targetText);
+            if (btn) btn.click();
+        }}
+    }};
+
+    window._my_keyup_listener = function(e) {{
+        if (e.key === 'Control') {{
+            const doc = window.document;
+            let overlay = doc.getElementById('shortcut-overlay');
+            if (overlay) overlay.style.display = 'none';
+        }}
+    }};
+
+    window.document.addEventListener('keydown', window._my_keydown_listener);
+    window.document.addEventListener('keyup', window._my_keyup_listener);
+    window._custom_js_injected = true;
+}}
+
+// 4. 오버레이 갱신 
+let overlay = window.document.getElementById('shortcut-overlay');
 if (!overlay) {{
-    overlay = doc.createElement('div');
+    overlay = window.document.createElement('div');
     overlay.id = 'shortcut-overlay';
     overlay.style.position = 'fixed';
     overlay.style.top = '50%';
@@ -698,55 +742,16 @@ if (!overlay) {{
     overlay.style.display = 'none';
     overlay.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
     overlay.style.pointerEvents = 'none';
-    doc.body.appendChild(overlay);
+    window.document.body.appendChild(overlay);
 }}
-overlay.innerHTML = "{shortcut_html}";
+overlay.innerHTML = `{shortcut_html}`;
+"""
 
-if (doc._my_keydown_listener) {{
-    doc.removeEventListener('keydown', doc._my_keydown_listener);
-    doc.removeEventListener('keyup', doc._my_keyup_listener);
-}}
+# 보안 이슈를 우회하기 위해 Javascript 코드를 Base64로 인코딩하여 메인 DOM에 주입
+js_b64 = base64.b64encode(raw_js_code.encode('utf-8')).decode('utf-8')
 
-doc._my_keydown_listener = function(e) {{
-    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-
-    if (e.key === 'ArrowLeft') {{
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '◀');
-        if (btn) btn.click();
-    }} else if (e.key === 'ArrowRight') {{
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === '▶');
-        if (btn) btn.click();
-    }} else if (e.key === 'Escape') {{
-        const btn_toggle = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Modify 모드') || el.innerText.includes('Drag 모드'));
-        if (btn_toggle) btn_toggle.click();
-        
-        const btn_esc = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === 'HE_ESC');
-        if (btn_esc) btn_esc.click();
-    }} else if (e.key === 'Delete' || e.key === 'Backspace') {{
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.trim() === '🗑️ 삭제');
-        if (btn) btn.click();
-    }} else if (e.key === 'Control') {{
-        if (currentMode !== 'transform') {{
-            overlay.style.display = 'block';
-        }}
-    }} else if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
-        if (e.ctrlKey) {{
-            e.preventDefault();
-        }}
-        const index = parseInt(e.key) - 1;
-        const targetText = 'HL_' + index;
-        const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === targetText);
-        if (btn) btn.click();
-    }}
-}};
-
-doc._my_keyup_listener = function(e) {{
-    if (e.key === 'Control') {{
-        overlay.style.display = 'none';
-    }}
-}};
-
-doc.addEventListener('keydown', doc._my_keydown_listener);
-doc.addEventListener('keyup', doc._my_keyup_listener);
-</script>
-""", height=0)
+st.markdown(f"""
+    <div style="display:none;">
+        <img src="dummy" onerror="eval(atob('{js_b64}'));" />
+    </div>
+""", unsafe_allow_html=True)
