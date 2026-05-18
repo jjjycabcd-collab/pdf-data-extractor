@@ -43,8 +43,7 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0,
-    'ocr_lang': 'kor+eng',
-    'group_counter': 0  # 고유 그룹 ID 발급용 카운터 추가
+    'ocr_lang': 'kor+eng'
 }
 
 for key, default in state_keys.items():
@@ -119,17 +118,6 @@ def delete_label_callback():
             for a in st.session_state.annotations:
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
-
-# [신규] 그룹 병합 기능용 콜백 함수
-def merge_with_previous_group(current_id):
-    annos = st.session_state.annotations
-    current_idx = next((i for i, a in enumerate(annos) if a['id'] == current_id), None)
-    
-    if current_idx is not None and current_idx > 0:
-        # 직전 항목의 그룹 ID를 가져와 현재 항목에 덮어씀
-        prev_group_id = annos[current_idx - 1]['group_id']
-        annos[current_idx]['group_id'] = prev_group_id
-        st.toast(f"이전 항목과 그룹(Group {prev_group_id})이 연동되었습니다!", icon="🔗")
 
 def get_html_diff(text1, text2):
     if not text1 and not text2:
@@ -237,7 +225,6 @@ if uploaded_file is not None:
         st.session_state.current_page = 0
         st.session_state.annotations = []
         st.session_state.crop_counter = 0
-        st.session_state.group_counter = 0
         st.session_state.selected_box_id = None
         st.session_state.redraw_trigger += 1
         st.rerun()
@@ -283,7 +270,8 @@ if st.session_state.file_bytes:
             "eng (영어 전용)",
             "chi_tra (한자 전용)"
         ], 
-        index=0
+        index=0,
+        help="추출 대상 텍스트의 주 언어를 선택하세요."
     )
     st.session_state.ocr_lang = ocr_lang_display.split(" ")[0]
     
@@ -307,7 +295,7 @@ if st.session_state.file_bytes:
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
     fabric_objects = []
-    active_rect_js = "null"
+    active_rect_js = "null"  # 현재 선택된 박스의 캔버스 픽셀 좌표를 JS로 전달할 변수
     
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -337,6 +325,7 @@ if st.session_state.file_bytes:
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
+    st.write("### PDF 상호작용 구축 도구")
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기 (체크 해제 시 편집 전용 넓은 화면 모드)", value=True)
     st.markdown("---")
 
@@ -485,8 +474,6 @@ if st.session_state.file_bytes:
                                         fit_rect = new_rect
                                 
                                 st.session_state.crop_counter += 1
-                                st.session_state.group_counter += 1 # 새 박스 생성 시 고유 그룹 카운터 증가
-                                
                                 img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                 img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
                                 
@@ -505,8 +492,7 @@ if st.session_state.file_bytes:
                                     'ocr_text': ocr_text,
                                     'final_text': basic_text,
                                     'img_name': img_name, 'img_path': img_path,
-                                    'label': st.session_state.active_label,
-                                    'group_id': st.session_state.group_counter # [신규] 기본 단독 그룹 부여
+                                    'label': st.session_state.active_label
                                 })
                                 
                                 st.session_state.selected_box_id = None
@@ -529,11 +515,9 @@ if st.session_state.file_bytes:
                 a = anno_dict[aid]
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
-                g_id = a.get('group_id', 0)
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + "]"
                 display_text = a.get('final_text', a['text'])
-                # 목록 식별용 포맷에 [그룹 번호] 추가 표시
-                return f"[G{g_id}] [P{a['page_idx']+1}] [{lbl}] {coords} | " + display_text[:15].replace('\n', ' ') + "..."
+                return f"[P{a['page_idx']+1}] [{lbl}] {coords} | " + display_text[:15].replace('\n', ' ') + "..."
 
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in valid_ids else "NEW_MODE"
             idx = radio_options.index(current_val)
@@ -568,23 +552,6 @@ if st.session_state.file_bytes:
             else:
                 st.markdown("---")
             
-            # [그룹화 UI 라인 신설]
-            c_g1, c_g2 = st.columns([4, 6])
-            with c_g1:
-                st.markdown(f"#### 🔗 현재 그룹: `Group {curr_anno.get('group_id', 0)}`")
-            with c_g2:
-                # 현재 항목의 전체 리스트 중 위치 인덱스 계산
-                curr_list_idx = list(anno_dict.keys()).index(curr_anno['id'])
-                if curr_list_idx > 0:
-                    st.button("🔗 이전 항목과 그룹 연결 (2단/이어지는 문장)", 
-                              key=f"merge_g_{curr_anno['id']}", 
-                              on_click=merge_with_previous_group, 
-                              args=(curr_anno['id'],),
-                              use_container_width=True,
-                              help="목록에서 바로 위에 있는 항목과 같은 그룹번호로 병합합니다.")
-                else:
-                    st.button("🔗 연결할 이전 항목 없음", disabled=True, use_container_width=True)
-
             curr_lbl = curr_anno.get('label', '미지정')
             lbl_idx = st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, 
@@ -625,49 +592,20 @@ if st.session_state.file_bytes:
             if c2.button("💾 저장"):
                 st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
             
-            # ====================================================
-            # [그룹 정렬 파이프라인 수립] 출력 데이터 생성 시 동일 그룹 병합
-            # ====================================================
-            # 1. 고유한 그룹 번호 순서대로 정렬하기 위해 고유 그룹 리스트 생성
-            unique_groups = sorted(list(set([a.get('group_id', 0) for a in st.session_state.annotations])))
-            
-            md_text = "# 문서 추출 데이터 (그룹 병합 완료)\n\n"
-            export_data = []
-            
-            for gid in unique_groups:
-                # 동일한 그룹 아이디를 가진 단락들 필터링
-                group_annos = [a for a in st.session_state.annotations if a.get('group_id', 0) == gid]
-                if not group_annos: continue
-                
-                # 라벨과 페이지는 그룹 내 첫 번째 항목을 기준 데이터로 채택
-                primary_anno = group_annos[0]
-                lbl = primary_anno.get('label', '미지정')
-                pages_str = ", ".join(sorted(list(set([str(a['page_idx']+1) for a in group_annos]))))
-                
-                # 그룹 내부의 텍스트들을 순서대로 스페이스로 묶어 결합
-                merged_final_text = " ".join([a.get('final_text', a['text']) for a in group_annos])
-                merged_raw_basic = "\n[단락 구분]\n".join([a['text'] for a in group_annos])
-                merged_raw_ocr = "\n[단락 구분]\n".join([a.get('ocr_text', '') for a in group_annos])
-                
-                # 마크다운 빌드
-                md_text += f"## 🔗 Group {gid} (Page: {pages_str})\n"
-                md_text += f"- **최종 지정 라벨 (Label):** `{lbl}`\n"
-                md_text += "#### 📝 통합 최종 추출 데이터\n```text\n" + merged_final_text + "\n```\n"
+            md_text = "# 문서 추출 데이터\n\n"
+            for a in st.session_state.annotations:
+                r = a['pdf_rect']
+                lbl = a.get('label', '미지정')
+                final_t = a.get('final_text', a['text'])
+                md_text += f"### Page {a['page_idx'] + 1}\n"
+                md_text += f"- **라벨 (Label):** `{lbl}`\n"
+                md_text += f"- **좌표 (BBox):** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                md_text += "#### 📝 최종 추출 데이터\n```text\n" + str(final_t) + "\n```\n"
                 md_text += "---\n\n"
-                
-                # JSON 빌드
-                export_data.append({
-                    "group_id": gid,
-                    "pages": [a['page_idx']+1 for a in group_annos],
-                    "label": lbl,
-                    "text": merged_final_text,
-                    "raw_basic_chunks": [a['text'] for a in group_annos],
-                    "raw_ocr_chunks": [a.get('ocr_text', '') for a in group_annos],
-                    "bboxes": [a['pdf_rect'] for a in group_annos]
-                })
-            # ====================================================
             
             c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
+            
+            export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
             c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                             file_name="result.json", mime="application/json")
         else:
@@ -693,7 +631,7 @@ for i, lbl in enumerate(st.session_state.labels):
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
 # ==========================================
-# 6. JavaScript (Base64 인젝션: 빈 공간 클릭 감지 복귀)
+# 6. JavaScript (Base64 인젝션: 빈 공간 클릭 감지 복귀 포함)
 # ==========================================
 shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키 1~9)</b></div>"
 shortcut_html += "<div style='display:grid; grid-template-columns: 40px auto; gap: 8px 15px; font-size:1.1em;'>"
@@ -761,6 +699,7 @@ if (!window._custom_js_injected) {{
         }}
     }};
 
+    // [신규] 캔버스 빈 영역 클릭 시 Drag 모드 자동 복귀 기능
     setInterval(() => {{
         if (window._current_tag_mode !== "transform") return;
         const iframes = window.document.querySelectorAll('iframe[title="streamlit_drawable_canvas.st_canvas"]');
@@ -859,7 +798,7 @@ if (!overlay) {{
     overlay.style.pointerEvents = 'none';
     window.document.body.appendChild(overlay);
 }}
-overlay.innerHTML = "{shortcut_html}";
+overlay.innerHTML = `{shortcut_html}`;
 """
 
 js_b64 = base64.b64encode(raw_js_code.encode('utf-8')).decode('utf-8')
