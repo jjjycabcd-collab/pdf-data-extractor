@@ -6,15 +6,18 @@ import os
 import io
 import re
 import shutil
-from PIL import Image, ImageDraw
+import pytesseract  # OCR 라이브러리 추가
+from PIL import Image
 from streamlit_drawable_canvas import st_canvas
+
+# Windows 환경 등에서 Tesseract 경로를 못 찾을 경우 아래 주석을 풀고 설치 경로를 지정해주세요.
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # ==========================================
 # 1. 페이지 및 상태 초기화
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# 숨김 버튼 제거 및 숫자 입력창 스타일 조정 CSS
 st.markdown(
     """
     <style>
@@ -115,47 +118,48 @@ def delete_label_callback():
                     a['label'] = "미지정"
 
 def extract_text_with_spaces(page, clip_rect):
-    """단어 단위로 추출한 뒤 블록/라인 기준으로 띄어쓰기를 강제로 병합"""
     words = page.get_text("words", clip=clip_rect)
     if not words:
         return ""
-    
     words.sort(key=lambda w: (w[5], w[6], w[7]))
-    
     lines = []
     current_line_words = []
     
     if words:
         prev_block_line = (words[0][5], words[0][6])
-        
         for w in words:
             curr_block_line = (w[5], w[6])
             word_text = w[4]
-            
             if curr_block_line != prev_block_line:
                 lines.append(" ".join(current_line_words))
                 current_line_words = [word_text]
                 prev_block_line = curr_block_line
             else:
                 current_line_words.append(word_text)
-                
         if current_line_words:
             lines.append(" ".join(current_line_words))
-            
     return "\n".join(lines)
 
 def clean_text(text):
     if not text: return ""
     lines = text.split('\n')
     cleaned_lines = []
-    
     for line in lines:
         line = line.strip()
         if "저자소개" not in line and line:
             line = re.sub(r'\s+', ' ', line)
             cleaned_lines.append(line)
-            
     return "\n".join(cleaned_lines)
+
+# [신규] OCR 텍스트 추출 함수
+def extract_text_via_ocr(img_path):
+    try:
+        img = Image.open(img_path)
+        # kor+eng 옵션으로 한글과 영어를 혼용하여 인식합니다.
+        ocr_text = pytesseract.image_to_string(img, lang='kor+eng')
+        return clean_text(ocr_text)
+    except Exception as e:
+        return f"[OCR 에러: Tesseract가 설치되어 있는지 확인하세요]\n{str(e)}"
 
 @st.cache_data(show_spinner=False)
 def get_page_image(file_bytes, page_idx):
@@ -202,7 +206,6 @@ if st.session_state.file_bytes:
     total_pages = len(doc)
 
     st.sidebar.markdown("---")
-    
     try:
         active_idx = st.session_state.labels.index(st.session_state.active_label)
     except ValueError:
@@ -214,9 +217,7 @@ if st.session_state.file_bytes:
     with st.sidebar.expander("⚙️ 라벨 추가/삭제 관리", expanded=False):
         st.text_input("새 라벨 이름", key="new_lbl_input")
         st.button("➕ 라벨 추가", on_click=add_label_callback)
-                
         st.markdown("<br>", unsafe_allow_html=True)
-        
         st.selectbox("삭제할 라벨 선택", options=st.session_state.labels, key="del_lbl_select")
         if len(st.session_state.labels) <= 1:
             st.warning("최소 1개의 라벨은 유지해야 합니다.")
@@ -267,17 +268,14 @@ if st.session_state.file_bytes:
             - 좌측 사이드바에서 PDF 파일을 업로드하고, 태깅할 데이터의 속성(라벨)을 선택하거나 새로 추가/삭제할 수 있습니다.
             
             **2. 태깅 모드 가이드**
-            - **Drag 모드:** 문서의 빈 공간을 마우스로 드래그하면 새로운 박스가 그려지고 데이터가 추출됩니다. (그리기 전 좌측에서 라벨을 먼저 선택하세요)
-            - **Modify 모드:** 이미 그려진 박스를 클릭하면 수정 모드가 됩니다. 크기나 위치를 조절한 뒤, 빈 공간을 클릭하거나 `ESC` 키를 누르면 수정사항이 저장되고 다시 Drag 모드로 복귀합니다.
+            - **Drag 모드:** 문서의 빈 공간을 마우스로 드래그하면 새로운 박스가 그려지고 데이터가 추출됩니다. 
+            - **Modify 모드:** 이미 그려진 박스를 클릭하면 수정 모드가 됩니다. 
             
-            **3. ⌨️ 작업 효율을 높이는 단축키**
-            - `Ctrl + 1~9` : 작업 중 마우스 이동 없이 태깅할 라벨을 즉시 변경합니다. (**Ctrl 키를 꾹 누르고 있으면** 화면 중앙에 지정된 숫자 단축키 안내창이 나타납니다.)
+            **3. 단축키**
+            - `Ctrl + 1~9` : 작업 중 마우스 이동 없이 태깅할 라벨을 즉시 변경합니다. 
             - `◀` / `▶` : 이전 페이지 / 다음 페이지로 이동합니다.
             - `Delete` 또는 `Backspace` : 현재 선택된 박스를 즉시 삭제합니다.
             - `ESC` : 수정 중인 작업을 취소하고 Drag 모드로 강제 복귀합니다.
-            
-            **4. 데이터 출력**
-            - 모든 태깅 작업이 끝나면 우측 하단의 버튼을 통해 메타데이터를 **마크다운(.md)** 또는 **JSON** 형식으로 다운로드할 수 있습니다.
             """)
 
         st.write("### PDF 상호작용 구축 도구")
@@ -285,12 +283,9 @@ if st.session_state.file_bytes:
         ctrl_cols = st.columns([1.2, 1.2, 2, 1.2, 1.2, 2])
         ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True, help="첫 페이지")
         ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True, help="이전 페이지")
-        
         ctrl_cols[2].number_input("페이지 입력", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, on_change=page_input_changed, key="page_input_widget", label_visibility="collapsed")
-        
         ctrl_cols[3].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True, help="다음 페이지")
         ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True, help="마지막 페이지")
-        
         ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -353,11 +348,15 @@ if st.session_state.file_bytes:
                                     st.session_state.crop_counter += 1
                                     new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                     new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
+                                    
+                                    # 해상도를 높여서 이미지 저장 (OCR 인식률 향상을 위해 Matrix 확대)
                                     page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(new_img_path)
                                     
                                     anno['img_name'] = new_img_name
                                     anno['img_path'] = new_img_path
                                     anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect))
+                                    # 수정 시 OCR 재추출 적용
+                                    anno['ocr_text'] = extract_text_via_ocr(new_img_path)
                                     modified = True
                 
                 if mode_toggle_pressed:
@@ -378,7 +377,6 @@ if st.session_state.file_bytes:
                     
                     if st.session_state.last_canvas_sig != obj_sig:
                         st.session_state.last_canvas_sig = obj_sig
-                        
                         w = new_obj['width'] * new_obj.get('scaleX', 1)
                         h = new_obj['height'] * new_obj.get('scaleY', 1)
                         
@@ -397,7 +395,6 @@ if st.session_state.file_bytes:
                                     if r[0] <= cx <= r[2] and r[1] <= cy <= r[3]:
                                         clicked_id = a['id']
                                         break
-                            
                             if clicked_id:
                                 st.session_state.selected_box_id = clicked_id
                                 st.rerun()
@@ -417,13 +414,19 @@ if st.session_state.file_bytes:
                             st.session_state.crop_counter += 1
                             img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                             img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
+                            
+                            # 해상도를 3배로 키워서 추출 (OCR 인식률 향상)
                             page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(img_path)
+                            
+                            # OCR 추출 실행
+                            ocr_result_text = extract_text_via_ocr(img_path)
                             
                             anno_id = f"id_{st.session_state.crop_counter}"
                             st.session_state.annotations.append({
                                 'id': anno_id, 'page_idx': st.session_state.current_page,
                                 'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                 'text': clean_text(extract_text_with_spaces(page, fit_rect)),
+                                'ocr_text': ocr_result_text,  # OCR 텍스트 저장
                                 'img_name': img_name, 'img_path': img_path,
                                 'label': st.session_state.active_label
                             })
@@ -448,6 +451,7 @@ if st.session_state.file_bytes:
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + "]"
+                # 좌측 메뉴 목록에는 일반 텍스트 요약본 표시
                 return f"[P{a['page_idx']+1}] [{lbl}] {coords} | " + a['text'][:15].replace('\n', ' ') + "..."
 
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in valid_ids else "NEW_MODE"
@@ -478,29 +482,33 @@ if st.session_state.file_bytes:
                 st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, 
                              key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
-                curr_anno['text'] = st.text_area("📝 내용 수정", value=curr_anno['text'], height=150)
+                # [수정] 추출 텍스트 영역을 PyMuPDF 텍스트와 OCR 텍스트 두 개로 분리
+                curr_anno['text'] = st.text_area("📝 기본 추출 (PyMuPDF)", value=curr_anno['text'], height=130)
+                
+                # 이전 버전 데이터 호환성을 위해 get 사용
+                current_ocr_val = curr_anno.get('ocr_text', '')
+                curr_anno['ocr_text'] = st.text_area("🔍 이미지 광학 인식 (OCR)", value=current_ocr_val, height=130)
 
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
-                
                 c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
-                
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
+                # 마크다운 및 JSON 다운로드에 OCR 데이터 추가 반영
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
                     lbl = a.get('label', '미지정')
-                    md_text += "### Page " + str(a['page_idx'] + 1) + "\n"
-                    md_text += "- **라벨 (Label):** `" + lbl + "`\n"
-                    md_text += "- **좌표 (BBox):** `[X: " + str(int(r[0])) + ", Y: " + str(int(r[1])) + ", W: " + str(int(r[2]-r[0])) + ", H: " + str(int(r[3]-r[1])) + "]`\n"
-                    md_text += chr(96) + chr(96) + chr(96) + "text\n"
-                    md_text += str(a['text']) + "\n"
-                    md_text += chr(96) + chr(96) + chr(96) + "\n\n---\n"
+                    md_text += f"### Page {a['page_idx'] + 1}\n"
+                    md_text += f"- **라벨 (Label):** `{lbl}`\n"
+                    md_text += f"- **좌표 (BBox):** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                    md_text += "#### 📝 기본 추출 텍스트\n```text\n" + str(a['text']) + "\n```\n"
+                    md_text += "#### 🔍 OCR 추출 텍스트\n```text\n" + str(a.get('ocr_text', '')) + "\n```\n"
+                    md_text += "---\n\n"
                 
                 c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a['text']} for a in st.session_state.annotations]
+                export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a['text'], "ocr_text": a.get('ocr_text', '')} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
         else:
