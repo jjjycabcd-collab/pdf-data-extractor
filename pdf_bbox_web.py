@@ -35,8 +35,8 @@ st.markdown(
 )
 
 if 'labels' not in st.session_state:
-    # 지침에 따른 필수 분류 체계 유지
-    st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌', '단행본', '기타']
+    # [수정] 단행본, 기타 라벨 제거 완료
+    st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌']
 
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
@@ -120,14 +120,12 @@ def delete_label_callback():
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
 
-# [수정] 텍스트 클릭 시 JS 함수(insertDiffText)를 호출하도록 HTML 태그 보강
 def get_html_diff(text1, text2):
     if not text1 and not text2:
         return ""
     matcher = difflib.SequenceMatcher(None, text1, text2)
     result = []
     
-    # 공통 스타일 정의
     del_style = "background-color: #ffcccc; color: #cc0000; text-decoration: line-through; cursor: pointer; border-radius: 3px; padding: 0 3px;"
     ins_style = "background-color: #ccffcc; color: #006600; font-weight: bold; cursor: pointer; border-radius: 3px; padding: 0 3px;"
     
@@ -135,16 +133,12 @@ def get_html_diff(text1, text2):
         if tag == 'equal':
             result.append(text1[i1:i2])
         elif tag == 'delete':
-            chunk = text1[i1:i2].replace('"', '&quot;').replace("'", "&#39;")
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{del_style}'>{text1[i1:i2]}</span>")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style}'>{text1[i1:i2]}</span>")
         elif tag == 'insert':
-            chunk = text2[j1:j2].replace('"', '&quot;').replace("'", "&#39;")
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
         elif tag == 'replace':
-            chunk1 = text1[i1:i2].replace('"', '&quot;').replace("'", "&#39;")
-            chunk2 = text2[j1:j2].replace('"', '&quot;').replace("'", "&#39;")
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{del_style} margin-right: 2px;'>{text1[i1:i2]}</span>")
-            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{del_style} margin-right: 2px;'>{text1[i1:i2]}</span>")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 커서 위치에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
             
     return "".join(result).replace('\n', '<br>')
 
@@ -277,14 +271,14 @@ if st.session_state.file_bytes:
             "chi_tra (한자 전용)"
         ], 
         index=0,
-        help="추출 대상 텍스트의 주 언어를 선택하세요. (문서에 한자가 포함된 경우 한자 혼용을 선택하세요)"
+        help="추출 대상 텍스트의 주 언어를 선택하세요."
     )
     st.session_state.ocr_lang = ocr_lang_display.split(" ")[0]
     
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
 
     # ==========================================
-    # 4. 메인 에디터 화면 (레이아웃 반응형)
+    # 4. 메인 에디터 화면
     # ==========================================
     full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
     if full_bg is None:
@@ -316,7 +310,6 @@ if st.session_state.file_bytes:
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
-    st.write("### PDF 상호작용 구축 도구")
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기 (체크 해제 시 편집 전용 넓은 화면 모드)", value=True)
     st.markdown("---")
 
@@ -632,42 +625,69 @@ const doc = window.parent.document;
 const win = window.parent;
 const currentMode = "{tag_mode}";
 
-// [핵심] 차이점 텍스트 클릭 시 교정창으로 전송하는 브릿지 함수
+// [핵심 보정] 입력창 포커스가 해제되어도 마지막 커서 위치를 실시간으로 브라우저에 강제 기억시키는 이벤트 리스너 리얼타임 바인딩
+if (!win._has_ta_listeners) {{
+    const trackCaret = function(e) {{
+        if (e.target.tagName === 'TEXTAREA') {{
+            win._lastTASelectionStart = e.target.selectionStart;
+            win._lastTASelectionEnd = e.target.selectionEnd;
+            win._lastActiveTA = e.target;
+        }}
+    }};
+    doc.addEventListener('keyup', trackCaret, true);
+    doc.addEventListener('click', trackCaret, true);
+    doc.addEventListener('focusout', trackCaret, true);
+    win._has_ta_listeners = true;
+}}
+
+// 단어 클릭 시 타겟 입력창을 정확히 매핑하여 글자를 꽂아넣는 메인 브릿지 로직
 win.insertDiffText = function(element) {{
     const textToInsert = element.innerText;
-    const textareas = doc.querySelectorAll('textarea');
-    let targetTA = null;
+    let targetTA = win._lastActiveTA;
     
-    for(let ta of textareas) {{
-        if(ta.getAttribute('aria-label') === "✨ 최종 교정 텍스트 (직접 수정 가능)") {{
-            targetTA = ta;
-            break;
+    // 만약 사용자가 한 번도 클릭하지 않아 트래킹된 입력창이 없을 경우, DOM을 직접 검색하여 매칭
+    if (!targetTA) {{
+        const labels = doc.querySelectorAll('label');
+        for (let lbl of labels) {{
+            if (lbl.innerText.includes("최종 교정 텍스트")) {{
+                const container = lbl.closest('[data-testid="stTextArea"]');
+                if (container) {{
+                    targetTA = container.querySelector('textarea');
+                    break;
+                }}
+            }
         }}
     }}
     
-    if(targetTA) {{
-        // 현재 커서 위치 또는 드래그된 텍스트 범위 파악
-        const startPos = targetTA.selectionStart;
-        const endPos = targetTA.selectionEnd;
+    if (targetTA) {{
+        // 마지막으로 기억된 커서 위치 가져오기 (없으면 텍스트 맨 뒤에 추가)
+        const startPos = (win._lastTASelectionStart !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionStart : targetTA.value.length;
+        const endPos = (win._lastTASelectionEnd !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionEnd : targetTA.value.length;
         const text = targetTA.value;
         
-        // 텍스트 교체 및 병합
+        // 데이터 조합 및 리플레이스먼트
         const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
         
-        // React의 입력 감지 트리거 우회
+        // React 프레임워크의 가상 돔 입력 제약을 강제로 우회하는 Setter 트리거링
         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value").set;
         nativeInputValueSetter.call(targetTA, newText);
         
-        // Streamlit에 값이 변경되었음을 알림
+        // Streamlit 백엔드 서버에 값이 변경되었음을 브로드캐스팅
         targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
         
-        // 커서를 붙여넣은 텍스트 바로 뒤로 이동
+        // 커서를 삽입된 새로운 단어 바로 뒤에 강제로 다시 위치시키고 입력창에 포커스를 복원
         targetTA.focus();
         targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
         
-        // 클릭 시 시각적 피드백 (반짝임)
+        // 다음 클릭 연속 작업을 위해 기억된 좌표 메모리 갱신
+        win._lastTASelectionStart = targetTA.selectionStart;
+        win._lastTASelectionEnd = targetTA.selectionEnd;
+        win._lastActiveTA = targetTA;
+        
+        // 시각적 반짝임 효과 피드백 피킹
         const originalBg = element.style.backgroundColor;
-        element.style.backgroundColor = '#fff000'; 
+        element.style.backgroundColor = '#fff000';
         setTimeout(() => {{ element.style.backgroundColor = originalBg; }}, 150);
     }}
 }};
