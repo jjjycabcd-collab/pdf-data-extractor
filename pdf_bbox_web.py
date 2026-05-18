@@ -11,6 +11,9 @@ import pytesseract
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
+# Windows 환경 등에서 Tesseract 경로를 못 찾을 경우 아래 주석을 풀고 설치 경로를 지정해주세요.
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 # ==========================================
 # 1. 페이지 및 상태 초기화
 # ==========================================
@@ -40,7 +43,7 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0,
-    'ocr_lang': 'kor+eng' # 기본 OCR 언어 세팅
+    'ocr_lang': 'kor+eng'
 }
 
 for key, default in state_keys.items():
@@ -180,7 +183,6 @@ def clean_text(text):
             cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
 
-# [수정] OCR 추출 시 언어(lang) 파라미터를 동적으로 받도록 변경
 def extract_text_via_ocr(img_path, lang):
     try:
         img = Image.open(img_path).convert('L')
@@ -253,12 +255,18 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     
-    # [신규] OCR 언어 선택 메뉴 추가
+    # [수정] 한자(chi_tra)가 포함된 옵션 추가
     ocr_lang_display = st.sidebar.selectbox(
         "🌐 OCR 인식 언어 설정", 
-        ["kor+eng (한/영 혼용)", "kor (한국어 전용)", "eng (영어 전용)"], 
+        [
+            "kor+eng (한/영 혼용)", 
+            "kor+eng+chi_tra (한/영/한자 혼용)", 
+            "kor (한국어 전용)", 
+            "eng (영어 전용)",
+            "chi_tra (한자 전용)"
+        ], 
         index=0,
-        help="추출 대상 텍스트의 주 언어를 선택하세요. (문서 언어에 맞게 설정해야 정확도가 올라갑니다)"
+        help="추출 대상 텍스트의 주 언어를 선택하세요. (문서에 한자가 포함된 경우 한자 혼용을 선택하세요)"
     )
     st.session_state.ocr_lang = ocr_lang_display.split(" ")[0]
     
@@ -375,7 +383,6 @@ if st.session_state.file_bytes:
                                     anno['img_path'] = new_img_path
                                     
                                     basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
-                                    # 언어 설정을 동적으로 주입
                                     ocr_text = extract_text_via_ocr(new_img_path, st.session_state.ocr_lang)
                                     
                                     anno['text'] = basic_text
@@ -441,7 +448,6 @@ if st.session_state.file_bytes:
                             page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(img_path)
                             
                             basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
-                            # 언어 설정을 동적으로 주입
                             ocr_text = extract_text_via_ocr(img_path, st.session_state.ocr_lang)
                             
                             anno_id = f"id_{st.session_state.crop_counter}"
@@ -511,13 +517,10 @@ if st.session_state.file_bytes:
                     st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
                 with col_o:
                     st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
-                    
-                    # [신규] 버튼을 2개로 나누어 재인식 기능 추가
                     c_btn1, c_btn2 = st.columns([6, 4])
                     c_btn1.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
                     
                     if c_btn2.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True, help="사이드바의 언어 설정으로 OCR을 다시 수행합니다."):
-                        # 클릭 시 현재 이미지 경로와, 사이드바에서 선택된 최신 언어 코드로 다시 추출
                         curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang)
                         st.rerun()
 
