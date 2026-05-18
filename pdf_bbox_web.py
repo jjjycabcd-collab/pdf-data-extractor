@@ -35,7 +35,6 @@ st.markdown(
 )
 
 if 'labels' not in st.session_state:
-    # [수정] 단행본, 기타 라벨 제거 완료
     st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌']
 
 state_keys = {
@@ -625,7 +624,7 @@ const doc = window.parent.document;
 const win = window.parent;
 const currentMode = "{tag_mode}";
 
-// [핵심 보정] 입력창 포커스가 해제되어도 마지막 커서 위치를 실시간으로 브라우저에 강제 기억시키는 이벤트 리스너 리얼타임 바인딩
+// [핵심 보정] 수정된 f-string 안전 괄호 포맷
 if (!win._has_ta_listeners) {{
     const trackCaret = function(e) {{
         if (e.target.tagName === 'TEXTAREA') {{
@@ -640,12 +639,10 @@ if (!win._has_ta_listeners) {{
     win._has_ta_listeners = true;
 }}
 
-// 단어 클릭 시 타겟 입력창을 정확히 매핑하여 글자를 꽂아넣는 메인 브릿지 로직
 win.insertDiffText = function(element) {{
     const textToInsert = element.innerText;
     let targetTA = win._lastActiveTA;
     
-    // 만약 사용자가 한 번도 클릭하지 않아 트래킹된 입력창이 없을 경우, DOM을 직접 검색하여 매칭
     if (!targetTA) {{
         const labels = doc.querySelectorAll('label');
         for (let lbl of labels) {{
@@ -655,37 +652,30 @@ win.insertDiffText = function(element) {{
                     targetTA = container.querySelector('textarea');
                     break;
                 }}
-            }
+            }}
         }}
     }}
     
     if (targetTA) {{
-        // 마지막으로 기억된 커서 위치 가져오기 (없으면 텍스트 맨 뒤에 추가)
         const startPos = (win._lastTASelectionStart !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionStart : targetTA.value.length;
         const endPos = (win._lastTASelectionEnd !== undefined && win._lastActiveTA === targetTA) ? win._lastTASelectionEnd : targetTA.value.length;
         const text = targetTA.value;
         
-        // 데이터 조합 및 리플레이스먼트
         const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
         
-        // React 프레임워크의 가상 돔 입력 제약을 강제로 우회하는 Setter 트리거링
         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value").set;
         nativeInputValueSetter.call(targetTA, newText);
         
-        // Streamlit 백엔드 서버에 값이 변경되었음을 브로드캐스팅
         targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
         targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
         
-        // 커서를 삽입된 새로운 단어 바로 뒤에 강제로 다시 위치시키고 입력창에 포커스를 복원
         targetTA.focus();
         targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
         
-        // 다음 클릭 연속 작업을 위해 기억된 좌표 메모리 갱신
         win._lastTASelectionStart = targetTA.selectionStart;
         win._lastTASelectionEnd = targetTA.selectionEnd;
         win._lastActiveTA = targetTA;
         
-        // 시각적 반짝임 효과 피드백 피킹
         const originalBg = element.style.backgroundColor;
         element.style.backgroundColor = '#fff000';
         setTimeout(() => {{ element.style.backgroundColor = originalBg; }}, 150);
