@@ -35,6 +35,7 @@ st.markdown(
 )
 
 if 'labels' not in st.session_state:
+    # 지침에 따른 필수 분류 체계 유지
     st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌', '단행본', '기타']
 
 state_keys = {
@@ -119,21 +120,32 @@ def delete_label_callback():
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
 
+# [수정] 텍스트 클릭 시 JS 함수(insertDiffText)를 호출하도록 HTML 태그 보강
 def get_html_diff(text1, text2):
     if not text1 and not text2:
         return ""
     matcher = difflib.SequenceMatcher(None, text1, text2)
     result = []
+    
+    # 공통 스타일 정의
+    del_style = "background-color: #ffcccc; color: #cc0000; text-decoration: line-through; cursor: pointer; border-radius: 3px; padding: 0 3px;"
+    ins_style = "background-color: #ccffcc; color: #006600; font-weight: bold; cursor: pointer; border-radius: 3px; padding: 0 3px;"
+    
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == 'equal':
             result.append(text1[i1:i2])
         elif tag == 'delete':
-            result.append(f"<span style='background-color: #ffcccc; color: #cc0000; text-decoration: line-through;'>{text1[i1:i2]}</span>")
+            chunk = text1[i1:i2].replace('"', '&quot;').replace("'", "&#39;")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{del_style}'>{text1[i1:i2]}</span>")
         elif tag == 'insert':
-            result.append(f"<span style='background-color: #ccffcc; color: #006600; font-weight: bold;'>{text2[j1:j2]}</span>")
+            chunk = text2[j1:j2].replace('"', '&quot;').replace("'", "&#39;")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
         elif tag == 'replace':
-            result.append(f"<span style='background-color: #ffcccc; color: #cc0000; text-decoration: line-through;'>{text1[i1:i2]}</span>")
-            result.append(f"<span style='background-color: #ccffcc; color: #006600; font-weight: bold;'>{text2[j1:j2]}</span>")
+            chunk1 = text1[i1:i2].replace('"', '&quot;').replace("'", "&#39;")
+            chunk2 = text2[j1:j2].replace('"', '&quot;').replace("'", "&#39;")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{del_style} margin-right: 2px;'>{text1[i1:i2]}</span>")
+            result.append(f"<span onclick='window.parent.insertDiffText(this)' title='클릭하여 교정창에 삽입' style='{ins_style}'>{text2[j1:j2]}</span>")
+            
     return "".join(result).replace('\n', '<br>')
 
 def apply_text_to_final(aid, source_type):
@@ -272,7 +284,7 @@ if st.session_state.file_bytes:
     autofit_enabled = st.sidebar.checkbox("✨ 정밀 오토피팅 모드", value=True)
 
     # ==========================================
-    # 4. 메인 에디터 화면 (레이아웃 반응형 개선)
+    # 4. 메인 에디터 화면 (레이아웃 반응형)
     # ==========================================
     full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
     if full_bg is None:
@@ -304,23 +316,18 @@ if st.session_state.file_bytes:
     initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
-    # [신규] 화면 모드 토글 (PDF 뷰어 숨기기/보이기)
     st.write("### PDF 상호작용 구축 도구")
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기 (체크 해제 시 편집 전용 넓은 화면 모드)", value=True)
     st.markdown("---")
 
-    # 토글 상태에 따른 레이아웃 동적 할당
     if show_pdf:
         col_pdf, col_right = st.columns([6, 4])
         col_list_img = col_right
         col_edit = col_right
     else:
         col_pdf = None
-        col_list_img, col_edit = st.columns([4, 6]) # 뷰어가 꺼지면 리스트와 편집창이 4:6 비율로 펼쳐짐
+        col_list_img, col_edit = st.columns([4, 6])
 
-    # ----------------------------------------
-    # [영역 1] PDF 원본 뷰어 패널 (토글 시 숨김 가능)
-    # ----------------------------------------
     if col_pdf:
         with col_pdf:
             ctrl_cols = st.columns([1.2, 1.2, 2, 1.2, 1.2, 2])
@@ -477,12 +484,8 @@ if st.session_state.file_bytes:
                                 st.session_state.selected_box_id = None
                                 st.rerun()
 
-    # 데이터 사전 준비
     anno_dict = {a['id']: a for a in st.session_state.annotations} if st.session_state.annotations else {}
 
-    # ----------------------------------------
-    # [영역 2] 추출 목록 및 캡처 이미지 패널
-    # ----------------------------------------
     with col_list_img:
         st.subheader("데이터 추출 목록")
         if anno_dict:
@@ -528,9 +531,6 @@ if st.session_state.file_bytes:
             st.info("추출된 데이터가 없습니다. PDF를 드래그하세요.")
             curr_anno = None
 
-    # ----------------------------------------
-    # [영역 3] 상세 교정 및 추출 설정 패널
-    # ----------------------------------------
     with col_edit:
         if curr_anno:
             if not show_pdf:
@@ -550,8 +550,6 @@ if st.session_state.file_bytes:
                 st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
             with col_o:
                 st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
-                
-                # 중첩 컬럼 에러 해결: 버튼을 위아래로 배치
                 st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
                 if st.button("🔄 재인식 (설정 언어 적용)", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True, help="사이드바의 언어 설정으로 OCR을 다시 수행합니다."):
                     curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang)
@@ -560,11 +558,11 @@ if st.session_state.file_bytes:
             st.markdown("##### 💡 두 추출 결과 차이점 (기본 vs OCR)")
             diff_html = get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))
             st.markdown(f"""
-            <div style='border:1px solid #ddd; padding:10px; border-radius:5px; background:#fff; max-height:150px; overflow-y:auto; font-size:0.9em; line-height: 1.5;'>
+            <div style='border:1px solid #ddd; padding:10px; border-radius:5px; background:#fff; max-height:150px; overflow-y:auto; font-size:1.0em; line-height: 1.6;'>
                 {diff_html}
             </div>
             """, unsafe_allow_html=True)
-            st.markdown("<span style='font-size:0.8em; color:gray;'>* 빨간색 취소선: OCR에서 누락됨 / 초록색 굵은글씨: OCR에서 추가됨</span>", unsafe_allow_html=True)
+            st.markdown("<span style='font-size:0.85em; color:gray;'>* ✨색칠된 단어를 <b>클릭</b>하면 아래 입력창 커서 위치에 바로 삽입됩니다.</span>", unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
@@ -597,9 +595,7 @@ if st.session_state.file_bytes:
             c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                             file_name="result.json", mime="application/json")
         else:
-            if show_pdf:
-                pass # PDF 화면이 열려있을 땐 별도 안내 생략
-            else:
+            if not show_pdf:
                 st.info("왼쪽 목록에서 편집할 항목을 선택하세요.")
 
 # ==========================================
@@ -621,7 +617,7 @@ for i, lbl in enumerate(st.session_state.labels):
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
 # ==========================================
-# 6. JavaScript 단축키 연동 및 가이드 오버레이
+# 6. JavaScript 단축키 연동 및 가이드 오버레이 (클릭 이벤트 포함)
 # ==========================================
 shortcut_html = "<div style='text-align:center; font-size:1.2em; margin-bottom:15px; border-bottom:1px solid #555; padding-bottom:10px;'><b>⌨️ 라벨 단축키 안내 (숫자키 1~9)</b></div>"
 shortcut_html += "<div style='display:grid; grid-template-columns: 40px auto; gap: 8px 15px; font-size:1.1em;'>"
@@ -633,7 +629,48 @@ shortcut_html += "</div>"
 components.html(f"""
 <script>
 const doc = window.parent.document;
+const win = window.parent;
 const currentMode = "{tag_mode}";
+
+// [핵심] 차이점 텍스트 클릭 시 교정창으로 전송하는 브릿지 함수
+win.insertDiffText = function(element) {{
+    const textToInsert = element.innerText;
+    const textareas = doc.querySelectorAll('textarea');
+    let targetTA = null;
+    
+    for(let ta of textareas) {{
+        if(ta.getAttribute('aria-label') === "✨ 최종 교정 텍스트 (직접 수정 가능)") {{
+            targetTA = ta;
+            break;
+        }}
+    }}
+    
+    if(targetTA) {{
+        // 현재 커서 위치 또는 드래그된 텍스트 범위 파악
+        const startPos = targetTA.selectionStart;
+        const endPos = targetTA.selectionEnd;
+        const text = targetTA.value;
+        
+        // 텍스트 교체 및 병합
+        const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
+        
+        // React의 입력 감지 트리거 우회
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value").set;
+        nativeInputValueSetter.call(targetTA, newText);
+        
+        // Streamlit에 값이 변경되었음을 알림
+        targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        
+        // 커서를 붙여넣은 텍스트 바로 뒤로 이동
+        targetTA.focus();
+        targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
+        
+        // 클릭 시 시각적 피드백 (반짝임)
+        const originalBg = element.style.backgroundColor;
+        element.style.backgroundColor = '#fff000'; 
+        setTimeout(() => {{ element.style.backgroundColor = originalBg; }}, 150);
+    }}
+}};
 
 let overlay = doc.getElementById('shortcut-overlay');
 if (!overlay) {{
