@@ -4,6 +4,7 @@ import fitz  # PyMuPDF
 import json
 import os
 import io
+import re  # 텍스트 정제를 위한 정규표현식 모듈 추가
 from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 
@@ -29,7 +30,7 @@ st.markdown(
 )
 
 if 'labels' not in st.session_state:
-    st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드']
+    st.session_state.labels = ['논문명', '저자명', '소속기관', '초록', '키워드', '참고문헌', '단행본', '기타']
 
 state_keys = {
     'file_bytes': None, 'pdf_doc': None, 'current_page': 0, 
@@ -112,10 +113,21 @@ def delete_label_callback():
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
 
+# [수정됨] 텍스트 정제 기능 강화
 def clean_text(text):
     if not text: return ""
     lines = text.split('\n')
-    return "\n".join([line.strip() for line in lines if "저자소개" not in line and line.strip()])
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        # '저자소개' 제외 및 빈 줄 제거
+        if "저자소개" not in line and line:
+            # 다중 공백을 단일 공백으로 치환
+            line = re.sub(r'\s+', ' ', line)
+            cleaned_lines.append(line)
+            
+    return "\n".join(cleaned_lines)
 
 @st.cache_data(show_spinner=False)
 def get_page_image(file_bytes, page_idx):
@@ -221,9 +233,6 @@ if st.session_state.file_bytes:
     left_col, right_col = st.columns([6, 4])
 
     with left_col:
-        # ====================================================
-        # [신규] 상단 온라인 도움말
-        # ====================================================
         with st.expander("💡 온라인 도움말 및 사용 가이드 (클릭하여 펼치기)", expanded=False):
             st.markdown("""
             **1. 기본 조작 및 라벨 관리**
@@ -282,6 +291,7 @@ if st.session_state.file_bytes:
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
             
+            # [기존 박스 수정(Transform) 블록]
             if tag_mode == "transform":
                 modified = False
                 for obj in objs:
@@ -298,12 +308,15 @@ if st.session_state.file_bytes:
                                     page = doc.load_page(st.session_state.current_page)
                                     fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
                                     
+                                    # [수정됨] Modify 모드 시 오토피팅 영역 예외 처리
                                     if autofit_enabled:
                                         words = page.get_text("words")
                                         matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
                                         if matched:
-                                            fit_rect = matched[0]
-                                            for r in matched[1:]: fit_rect |= r
+                                            new_rect = matched[0]
+                                            for r in matched[1:]: new_rect |= r
+                                            fit_rect = new_rect
+                                        # matched가 없을 경우 기존 fit_rect를 그대로 유지
 
                                     anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
                                     
@@ -327,6 +340,7 @@ if st.session_state.file_bytes:
                 elif modified:
                     st.rerun()
 
+            # [신규 박스 생성(Drag) 블록]
             else:
                 if mode_toggle_pressed:
                     st.session_state.selected_box_id = None
@@ -366,12 +380,15 @@ if st.session_state.file_bytes:
                             page = doc.load_page(st.session_state.current_page)
                             fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
                             
+                            # [수정됨] Drag 모드 시 오토피팅 영역 예외 처리
                             if autofit_enabled:
                                 words = page.get_text("words")
                                 matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
                                 if matched:
-                                    fit_rect = matched[0]
-                                    for r in matched[1:]: fit_rect |= r
+                                    new_rect = matched[0]
+                                    for r in matched[1:]: new_rect |= r
+                                    fit_rect = new_rect
+                                # matched가 없을 경우 기존 fit_rect를 그대로 유지
                             
                             st.session_state.crop_counter += 1
                             img_name = f"crop_{st.session_state.crop_counter:03d}.png"
