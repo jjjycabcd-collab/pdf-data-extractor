@@ -255,7 +255,6 @@ if st.session_state.file_bytes:
 
     st.sidebar.markdown("---")
     
-    # [수정] 한자(chi_tra)가 포함된 옵션 추가
     ocr_lang_display = st.sidebar.selectbox(
         "🌐 OCR 인식 언어 설정", 
         [
@@ -517,10 +516,10 @@ if st.session_state.file_bytes:
                     st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
                 with col_o:
                     st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
-                    c_btn1, c_btn2 = st.columns([6, 4])
-                    c_btn1.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
                     
-                    if c_btn2.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True, help="사이드바의 언어 설정으로 OCR을 다시 수행합니다."):
+                    # ❌ 3중 중첩 방지: st.columns([6, 4]) 제거하고 위아래로 깔끔하게 배치
+                    st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
+                    if st.button("🔄 재인식 (설정 언어 적용)", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True, help="사이드바의 언어 설정으로 OCR을 다시 수행합니다."):
                         curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang)
                         st.rerun()
 
