@@ -118,7 +118,6 @@ def delete_label_callback():
                 if a.get('label') == del_target:
                     a['label'] = "미지정"
 
-# [신규] 텍스트 비교(Diff) 결과를 HTML로 생성하는 함수
 def get_html_diff(text1, text2):
     if not text1 and not text2:
         return ""
@@ -136,17 +135,14 @@ def get_html_diff(text1, text2):
             result.append(f"<span style='background-color: #ccffcc; color: #006600; font-weight: bold;'>{text2[j1:j2]}</span>")
     return "".join(result).replace('\n', '<br>')
 
-# [신규] 최종 텍스트 채택 콜백 함수
 def apply_text_to_final(aid, source_type):
     for a in st.session_state.annotations:
         if a['id'] == aid:
             target_text = a['text'] if source_type == 'basic' else a.get('ocr_text', '')
             a['final_text'] = target_text
-            # 위젯 상태 강제 업데이트
             st.session_state[f"final_input_{aid}"] = target_text
             break
 
-# [신규] 최종 텍스트 수동 변경 콜백
 def update_final_text(aid):
     for a in st.session_state.annotations:
         if a['id'] == aid:
@@ -188,8 +184,10 @@ def clean_text(text):
 
 def extract_text_via_ocr(img_path):
     try:
-        img = Image.open(img_path)
-        ocr_text = pytesseract.image_to_string(img, lang='kor+eng')
+        # 이미지 전처리: 흑백(Grayscale) 변환으로 노이즈 감소 및 가독성 확보
+        img = Image.open(img_path).convert('L')
+        # 한글('kor') 단독 지정 및 psm 6(단일 텍스트 블록 간주) 옵션 세팅
+        ocr_text = pytesseract.image_to_string(img, lang='kor', config='--psm 6')
         return clean_text(ocr_text)
     except Exception as e:
         return f"[OCR 에러: Tesseract가 설치되어 있는지 확인하세요]\n{str(e)}"
@@ -365,18 +363,19 @@ if st.session_state.file_bytes:
                                     st.session_state.crop_counter += 1
                                     new_img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                                     new_img_path = os.path.join(IMAGE_SAVE_DIR, new_img_name)
-                                    page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(new_img_path)
+                                    
+                                    # 크롭 이미지 저장 해상도를 4배로 키워 텍스트 왜곡 방지
+                                    page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(new_img_path)
                                     
                                     anno['img_name'] = new_img_name
                                     anno['img_path'] = new_img_path
                                     
-                                    # 텍스트 재추출 및 최종 텍스트 초기화
                                     basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
                                     ocr_text = extract_text_via_ocr(new_img_path)
                                     
                                     anno['text'] = basic_text
                                     anno['ocr_text'] = ocr_text
-                                    anno['final_text'] = basic_text # 수정 시 기본으로 리셋
+                                    anno['final_text'] = basic_text
                                     modified = True
                 
                 if mode_toggle_pressed:
@@ -434,7 +433,9 @@ if st.session_state.file_bytes:
                             st.session_state.crop_counter += 1
                             img_name = f"crop_{st.session_state.crop_counter:03d}.png"
                             img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
-                            page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fit_rect).save(img_path)
+                            
+                            # 크롭 이미지 저장 해상도를 4배로 키워 텍스트 왜곡 방지
+                            page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(img_path)
                             
                             basic_text = clean_text(extract_text_with_spaces(page, fit_rect))
                             ocr_text = extract_text_via_ocr(img_path)
@@ -445,7 +446,7 @@ if st.session_state.file_bytes:
                                 'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                 'text': basic_text,
                                 'ocr_text': ocr_text,
-                                'final_text': basic_text, # 신규 생성 시 최종 텍스트는 기본 추출로 세팅
+                                'final_text': basic_text,
                                 'img_name': img_name, 'img_path': img_path,
                                 'label': st.session_state.active_label
                             })
@@ -470,7 +471,6 @@ if st.session_state.file_bytes:
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
                 coords = "[X:" + str(int(r[0])) + ", Y:" + str(int(r[1])) + "]"
-                # 목록에는 '최종 텍스트'의 미리보기를 보여줍니다.
                 display_text = a.get('final_text', a['text'])
                 return f"[P{a['page_idx']+1}] [{lbl}] {coords} | " + display_text[:15].replace('\n', ' ') + "..."
 
@@ -500,9 +500,6 @@ if st.session_state.file_bytes:
                 st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, 
                              key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
-                # ===============================================
-                # [신규] 비교 UI 및 최종 텍스트 결정 영역
-                # ===============================================
                 st.markdown("##### 🔍 텍스트 추출 결과 비교")
                 col_b, col_o = st.columns(2)
                 with col_b:
@@ -523,21 +520,18 @@ if st.session_state.file_bytes:
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 최종 결정된 텍스트 영역 (직접 편집 가능)
                 curr_anno['final_text'] = st.text_area("✨ 최종 교정 텍스트 (직접 수정 가능)", 
                                                        value=curr_anno.get('final_text', curr_anno['text']), 
                                                        height=150, 
                                                        key=f"final_input_{curr_anno['id']}", 
                                                        on_change=update_final_text, 
                                                        args=(curr_anno['id'],))
-                # ===============================================
 
                 c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
                 c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
                 if c2.button("💾 저장"):
                     st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
                 
-                # 마크다운 및 JSON 다운로드 (최종 교정 텍스트 기준)
                 md_text = "# 문서 추출 데이터\n\n"
                 for a in st.session_state.annotations:
                     r = a['pdf_rect']
@@ -551,7 +545,6 @@ if st.session_state.file_bytes:
                 
                 c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
                 
-                # JSON 내보낼 때에도 최종 데이터 반영
                 export_data = [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
                 c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), 
                                 file_name="result.json", mime="application/json")
