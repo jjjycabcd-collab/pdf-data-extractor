@@ -171,9 +171,9 @@ doc_types = ['논문메타', '논문전문', '단행본', '기타']
 st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=doc_types, index=doc_types.index(st.session_state.doc_type) if st.session_state.doc_type in doc_types else 0)
 
 # ---------------------------------------------------------
-# [수정됨] 프로그램 명세서(SPA) 링크 버튼 렌더링 (GitHub Pages 우회)
+# [수정됨] Githack 서비스를 이용한 HTML 렌더링 우회 링크 적용
 # ---------------------------------------------------------
-github_html_url = "https://htmlpreview.github.io/?https://github.com/jjjycabcd-collab/pdf-data-extractor/blob/main/manual.html"
+github_html_url = "https://raw.githack.com/jjjycabcd-collab/pdf-data-extractor/main/manual.html"
 
 link_html = f'''
     <a href="{github_html_url}" target="_blank" 
