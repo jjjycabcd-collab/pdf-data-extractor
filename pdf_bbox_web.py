@@ -55,8 +55,17 @@ IMAGE_SAVE_DIR = "extracted_images"
 os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
 # ==========================================
-# 2. 콜백 함수
+# 2. 캐싱 및 유틸리티 함수 (속도 최적화 핵심)
 # ==========================================
+# [최적화 1] 무거운 캔버스 이미지 변환을 메모리에 캐싱하여 화면 깜빡임/버벅임 완벽 제거
+@st.cache_data(show_spinner=False)
+def get_cached_display_img(file_bytes, page_idx, canvas_w):
+    full_bg, pdf_w, pdf_h = get_page_image(file_bytes, page_idx)
+    if full_bg is None: return None, 0, 1.0
+    canvas_h = int(canvas_w * (pdf_h / pdf_w))
+    display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
+    return display_img, canvas_h, canvas_w / pdf_w
+
 def go_first(): st.session_state.current_page = 0; st.session_state.selected_box_id = None
 def go_prev(): st.session_state.current_page = max(0, st.session_state.current_page - 1); st.session_state.selected_box_id = None
 def go_next(total_pages): st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1); st.session_state.selected_box_id = None
@@ -188,17 +197,14 @@ if st.session_state.file_bytes:
     text_area_height = st.sidebar.slider("↕️ 교정창 세로 길이 (px)", min_value=150, max_value=1000, value=250, step=50)
 
     # ==========================================
-    # 4. 메인 뷰어 캔버스
+    # 4. 메인 뷰어 캔버스 (최적화 렌더링)
     # ==========================================
-    full_bg, pdf_w, pdf_h = get_page_image(st.session_state.file_bytes, st.session_state.current_page)
-    if full_bg is None:
+    canvas_w = 700
+    display_img, canvas_h, pdf_to_canvas_ratio = get_cached_display_img(st.session_state.file_bytes, st.session_state.current_page, canvas_w)
+    
+    if display_img is None:
         st.error("PDF 페이지를 로드할 수 없습니다.")
         st.stop()
-
-    canvas_w = 700
-    canvas_h = int(canvas_w * (pdf_h / pdf_w))
-    display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
-    pdf_to_canvas_ratio = canvas_w / pdf_w
 
     fabric_objects = []
     
@@ -366,9 +372,22 @@ if st.session_state.file_bytes:
                 st.session_state.selected_box_id = None if selected_id == "NEW_MODE" else selected_id
                 if selected_id != "NEW_MODE": st.session_state.current_page = anno_dict[selected_id]['page_idx']
                 st.rerun()
+                
+            # [최적화 2] 전체 재인식 버튼 추가 (일괄 처리)
+            st.markdown("---")
+            if st.button("🔄 현재 페이지 일괄 재인식 (OCR)", use_container_width=True, help="현재 설정된 언어와 필터로 이 페이지의 모든 박스를 다시 인식합니다."):
+                updated_count = 0
+                for a in st.session_state.annotations:
+                    if a['page_idx'] == st.session_state.current_page and os.path.exists(a['img_path']):
+                        a['ocr_text'] = extract_text_via_ocr(a['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                        updated_count += 1
+                if updated_count > 0:
+                    st.success(f"현재 페이지의 {updated_count}개 항목이 성공적으로 재인식되었습니다!")
+                    st.rerun()
 
             curr_anno = anno_dict.get(st.session_state.selected_box_id)
             if curr_anno and os.path.exists(curr_anno['img_path']):
+                st.markdown("<br>", unsafe_allow_html=True)
                 with open(curr_anno['img_path'], "rb") as img_file: st.image(img_file.read(), use_column_width=True)
         else:
             st.info("추출된 데이터가 없습니다. PDF를 드래그하세요.")
@@ -380,7 +399,6 @@ if st.session_state.file_bytes:
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
             with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
-                # 고유 Key 추가로 버튼 상태 꼬임 방지
                 copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력", key=f"bulk_txt_{curr_anno['id']}")
                 if st.button("📋 현재 좌표 일괄 복사 및 추출 실행", key=f"bulk_btn_{curr_anno['id']}"):
                     target_pages = parse_page_ranges(copy_target_pages, total_pages)
@@ -393,7 +411,6 @@ if st.session_state.file_bytes:
                             page = doc.load_page(p_num - 1)
                             fit_rect = fitz.Rect(orig_rect)
                             
-                            # [핵심 추가] 중복 복사 방지 철벽 방어 (오차 5px 이내에 같은 라벨 있으면 무시)
                             is_dup = False
                             for existing in st.session_state.annotations:
                                 if existing['page_idx'] == p_num - 1 and existing.get('label') == curr_lbl:
@@ -433,7 +450,8 @@ if st.session_state.file_bytes:
             with col_o:
                 st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
                 st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
-                if st.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
+                # 단일 항목 재인식
+                if st.button("🔄 선택 항목 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
                     curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
                     st.rerun()
 
@@ -447,7 +465,6 @@ if st.session_state.file_bytes:
             if c2.button("💾 저장"):
                 st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
             
-            # 마크다운 텍스트 생성
             md_text = f"# 문서 추출 데이터 ({st.session_state.doc_type})\n\n"
             for a in st.session_state.annotations:
                 r = a['pdf_rect']
@@ -478,7 +495,6 @@ st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.el
 for i, lbl in enumerate(st.session_state.labels[:9]): st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
-# [핵심 수정 2] NameError를 원천 차단하는 가장 확실한 방법 (안전한 변수 주입)
 safe_active_rect = globals().get('active_rect_js', 'null')
 safe_tag_mode = globals().get('tag_mode', 'rect')
 
