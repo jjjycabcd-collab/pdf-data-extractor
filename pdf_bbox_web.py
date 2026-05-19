@@ -14,11 +14,10 @@ from pdf_utils import (
 )
 
 # ==========================================
-# 1. 페이지 및 상태 초기화 (전역 변수 포함)
+# 1. 페이지 및 상태 초기화
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
 
-# [핵심 수정 1] NameError 방지를 위해 JS 통신용 변수를 최상단에 기본값으로 선언
 active_rect_js = "null"
 tag_mode = "rect"
 
@@ -202,7 +201,6 @@ if st.session_state.file_bytes:
     pdf_to_canvas_ratio = canvas_w / pdf_w
 
     fabric_objects = []
-    active_rect_js = "null" 
     
     for anno in st.session_state.annotations:
         if anno['page_idx'] == st.session_state.current_page:
@@ -287,7 +285,7 @@ if st.session_state.file_bytes:
                                         
                     if mode_toggle_pressed or modified:
                         if mode_toggle_pressed: st.session_state.selected_box_id = None
-                        if modified: st.session_state.redraw_trigger += 1 # [핵심 수정 2] 무한 루프 차단을 위한 동기화 신호
+                        if modified: st.session_state.redraw_trigger += 1 
                         st.rerun()
 
                 else:
@@ -316,7 +314,7 @@ if st.session_state.file_bytes:
                                             break
                                 if clicked_id:
                                     st.session_state.selected_box_id = clicked_id
-                                    st.session_state.redraw_trigger += 1 # 캔버스 동기화
+                                    st.session_state.redraw_trigger += 1
                                     st.rerun()
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
@@ -344,7 +342,7 @@ if st.session_state.file_bytes:
                                     'img_path': img_path, 'label': st.session_state.active_label
                                 })
                                 st.session_state.selected_box_id = None
-                                st.session_state.redraw_trigger += 1 # [핵심 수정 3] 무한 루프 차단을 위한 동기화 신호
+                                st.session_state.redraw_trigger += 1 
                                 st.rerun()
 
     # ==========================================
@@ -382,15 +380,28 @@ if st.session_state.file_bytes:
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
             with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
-                copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력")
-                if st.button("📋 현재 좌표 일괄 복사 및 추출 실행"):
+                # 고유 Key 추가로 버튼 상태 꼬임 방지
+                copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력", key=f"bulk_txt_{curr_anno['id']}")
+                if st.button("📋 현재 좌표 일괄 복사 및 추출 실행", key=f"bulk_btn_{curr_anno['id']}"):
                     target_pages = parse_page_ranges(copy_target_pages, total_pages)
                     if target_pages:
                         orig_rect = curr_anno['pdf_rect']
+                        copy_count = 0
                         for p_num in target_pages:
                             if p_num - 1 == curr_anno['page_idx']: continue
+                            
                             page = doc.load_page(p_num - 1)
                             fit_rect = fitz.Rect(orig_rect)
+                            
+                            # [핵심 추가] 중복 복사 방지 철벽 방어 (오차 5px 이내에 같은 라벨 있으면 무시)
+                            is_dup = False
+                            for existing in st.session_state.annotations:
+                                if existing['page_idx'] == p_num - 1 and existing.get('label') == curr_lbl:
+                                    ex_r = existing['pdf_rect']
+                                    if abs(ex_r[0] - fit_rect.x0) < 5 and abs(ex_r[1] - fit_rect.y0) < 5:
+                                        is_dup = True
+                                        break
+                            if is_dup: continue
                             
                             st.session_state.crop_counter += 1
                             img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
@@ -406,8 +417,14 @@ if st.session_state.file_bytes:
                                 'final_text': basic_text,
                                 'img_path': img_path, 'label': curr_lbl
                             })
-                        st.session_state.redraw_trigger += 1
-                        st.rerun()
+                            copy_count += 1
+                            
+                        if copy_count > 0:
+                            st.success(f"{copy_count}개 페이지에 영역 복사가 완료되었습니다!")
+                            st.session_state.redraw_trigger += 1
+                            st.rerun()
+                        else:
+                            st.warning("이미 복사되었거나 유효한 대상 페이지가 없습니다.")
 
             col_b, col_o = st.columns(2)
             with col_b:
@@ -423,7 +440,6 @@ if st.session_state.file_bytes:
             st.markdown(f"<div style='border:1px solid #ddd; padding:10px; max-height:150px; overflow-y:auto;'>{get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))}</div>", unsafe_allow_html=True)
             curr_anno['final_text'] = st.text_area("✨ 최종 교정 텍스트 (직접 수정 가능)", value=curr_anno.get('final_text', curr_anno['text']), height=text_area_height, key=f"final_input_{curr_anno['id']}", on_change=update_final_text, args=(curr_anno['id'],))
 
-            # === 복구된 마크다운 & 다운로드 버튼 섹션 ===
             c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
             
             c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
@@ -447,16 +463,11 @@ if st.session_state.file_bytes:
             
             c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
             
-            # JSON 추출
             export_data = {
-                "document_meta": {
-                    "file_name": st.session_state.file_name,
-                    "document_type": st.session_state.doc_type
-                },
+                "document_meta": {"file_name": st.session_state.file_name, "document_type": st.session_state.doc_type},
                 "annotations": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
             }
             c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="result.json", mime="application/json")
-            # ==========================================
 
 # ==========================================
 # 6. 숨김 버튼 및 JavaScript (단축키 등)
@@ -467,9 +478,13 @@ st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.el
 for i, lbl in enumerate(st.session_state.labels[:9]): st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
 st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
 
+# [핵심 수정 2] NameError를 원천 차단하는 가장 확실한 방법 (안전한 변수 주입)
+safe_active_rect = globals().get('active_rect_js', 'null')
+safe_tag_mode = globals().get('tag_mode', 'rect')
+
 raw_js = f"""
-window._current_active_rect = {active_rect_js};
-window._current_tag_mode = "{tag_mode}";
+window._current_active_rect = {safe_active_rect};
+window._current_tag_mode = "{safe_tag_mode}";
 if (!window._custom_js_injected) {{
     window.insertDiffText = function(el) {{
         const textToInsert = el.innerText;
