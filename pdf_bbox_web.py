@@ -54,6 +54,9 @@ for key, default in state_keys.items():
 IMAGE_SAVE_DIR = "extracted_images"
 os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
+# 캔버스 결과를 안전하게 담기 위한 초기화
+canvas_result = None
+
 # ==========================================
 # 2. 캐싱 및 유틸리티 함수 (속도 최적화 핵심)
 # ==========================================
@@ -111,7 +114,7 @@ def update_final_text(aid):
             break
 
 def re_extract_annotation(anno, doc, page_idx):
-    """변경된 좌표를 바탕으로 이미지, 텍스트, OCR을 재추출하는 공통 로직 함수"""
+    """명시적으로 호출되었을 때만 이미지 캡처 및 OCR 재수행"""
     page = doc.load_page(page_idx)
     fit_rect = fitz.Rect(*anno['pdf_rect'])
     
@@ -127,8 +130,6 @@ def re_extract_annotation(anno, doc, page_idx):
     anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
     anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
     anno['final_text'] = anno['text']
-    if 'pending_extract' in anno:
-        anno['pending_extract'] = False
 
 # ==========================================
 # 3. 사이드바 구성
@@ -161,15 +162,6 @@ if uploaded_file is not None:
 if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
-
-    # 빈 화면 클릭이나 목록 전환 등으로 포커스가 풀린 대기(pending) 항목 자동 처리
-    need_rerun = False
-    for a in st.session_state.annotations:
-        if a.get('pending_extract') and st.session_state.selected_box_id != a['id']:
-            re_extract_annotation(a, doc, a['page_idx'])
-            need_rerun = True
-    if need_rerun:
-        st.rerun()
 
     with st.sidebar.expander("⚡ 단어 기반 자동 탐색 (Quick-Find)", expanded=False):
         qf_keyword = st.text_input("찾을 키워드 (예: 참고문헌)")
@@ -281,35 +273,20 @@ if st.session_state.file_bytes:
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.redraw_trigger}",
             )
 
-            if canvas_result.json_data and "objects" in canvas_result.json_data:
+            if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
                 objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
                 
                 if tag_mode == "transform":
-                    modified = False
-                    for obj in objs:
-                        if "id" in obj:
-                            for anno in st.session_state.annotations:
-                                if anno['id'] == obj['id']:
-                                    old_r = anno['pdf_rect']
-                                    n_x0, n_y0 = obj['left'] / pdf_to_canvas_ratio, obj['top'] / pdf_to_canvas_ratio
-                                    n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                                    n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-                                    
-                                    if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
-                                        # 크기 수정(Transform) 시에는 오토피팅 개입 차단 및 즉시 무거운 변환 금지
-                                        anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
-                                        anno['pending_extract'] = True  # 지연 처리 마킹
-                                        modified = True
-                                        
-                    if mode_toggle_pressed or modified:
-                        if mode_toggle_pressed: st.session_state.selected_box_id = None
+                    # [변경점] 드래그 중 자동 수정 및 튕김 방지! 아무 작업도 하지 않고 UI 버튼 표시로 이관.
+                    if mode_toggle_pressed:
+                        st.session_state.selected_box_id = None
                         st.rerun()
-
                 else:
                     if mode_toggle_pressed:
                         st.session_state.selected_box_id = None
                         st.rerun()
                     
+                    # 새 박스를 Drag해서 그렸을 때의 처리 (기존과 동일)
                     if len(objs) > len(fabric_objects):
                         new_obj = objs[-1]
                         obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
@@ -404,13 +381,39 @@ if st.session_state.file_bytes:
 
     with col_edit:
         if curr_anno:
-            # 크기 변경 대기 UI 노출 및 버튼을 통한 강제 재구동 지원
-            if curr_anno.get('pending_extract'):
-                st.warning("⚠️ 영역 크기가 변경되었습니다. 재인식을 원하시면 빈 화면을 클릭하거나 아래 버튼을 클릭하세요.")
-                if st.button("✅ 크기 조절 완료 및 재추출 실행", type="primary", use_container_width=True):
-                    re_extract_annotation(curr_anno, doc, curr_anno['page_idx'])
+            # ==========================================
+            # [핵심 로직] 캔버스 변경 사항 수동 확정 버튼
+            # ==========================================
+            has_changes = False
+            new_pdf_rect = None
+            
+            # 캔버스 객체 정보에서 선택된 박스의 최신 크기를 가져와 기존 데이터와 비교
+            if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
+                for obj in canvas_result.json_data["objects"]:
+                    if obj.get("id") == curr_anno["id"]:
+                        n_x0 = obj['left'] / pdf_to_canvas_ratio
+                        n_y0 = obj['top'] / pdf_to_canvas_ratio
+                        n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                        n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                        
+                        old_r = curr_anno['pdf_rect']
+                        if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
+                            has_changes = True
+                            new_pdf_rect = [n_x0, n_y0, n_x1, n_y1]
+                        break
+
+            # 변경 사항이 있을 때만 눈에 띄는 버튼 등장!
+            if has_changes:
+                st.error("⚠️ 영역 크기가 조절되었습니다. 텍스트를 재인식하려면 아래 버튼을 클릭하세요.")
+                if st.button("✅ 크기 조절 완료 (이미지 재추출 및 OCR 진행)", type="primary", use_container_width=True):
+                    curr_anno['pdf_rect'] = new_pdf_rect
+                    with st.spinner("변경된 영역 캡처 및 OCR 재인식 중..."):
+                        # 오토피팅 없이 사용자가 지정한 크기 그대로 적용 및 재추출
+                        re_extract_annotation(curr_anno, doc, curr_anno['page_idx'])
+                    st.session_state.redraw_trigger += 1 # 캔버스 새로고침용 트리거
                     st.rerun()
                 st.markdown("---")
+            # ==========================================
 
             curr_lbl = curr_anno.get('label', '미지정')
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
