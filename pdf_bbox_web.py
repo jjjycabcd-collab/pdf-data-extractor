@@ -14,9 +14,13 @@ from pdf_utils import (
 )
 
 # ==========================================
-# 1. 페이지 및 상태 초기화
+# 1. 페이지 및 상태 초기화 (전역 변수 포함)
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
+
+# [핵심 수정 1] NameError 방지를 위해 JS 통신용 변수를 최상단에 기본값으로 선언
+active_rect_js = "null"
+tag_mode = "rect"
 
 st.markdown(
     """
@@ -259,7 +263,6 @@ if st.session_state.file_bytes:
                                     n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                     n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                     
-                                    # [수정포인트] 0.5 픽셀 차이 무한진동 방지를 위해 2.0 픽셀로 오차범위 완화
                                     if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
                                         page = doc.load_page(st.session_state.current_page)
                                         fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
@@ -281,8 +284,10 @@ if st.session_state.file_bytes:
                                         anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
                                         anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
                                         modified = True
+                                        
                     if mode_toggle_pressed or modified:
                         if mode_toggle_pressed: st.session_state.selected_box_id = None
+                        if modified: st.session_state.redraw_trigger += 1 # [핵심 수정 2] 무한 루프 차단을 위한 동기화 신호
                         st.rerun()
 
                 else:
@@ -302,12 +307,17 @@ if st.session_state.file_bytes:
                             
                             if w < 10 and h < 10:
                                 cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
+                                clicked_id = None
                                 for a in reversed(st.session_state.annotations):
                                     if a['page_idx'] == st.session_state.current_page:
                                         r = a['pdf_rect']
                                         if r[0] <= cx <= r[2] and r[1] <= cy <= r[3]:
-                                            st.session_state.selected_box_id = a['id']
-                                            st.rerun()
+                                            clicked_id = a['id']
+                                            break
+                                if clicked_id:
+                                    st.session_state.selected_box_id = clicked_id
+                                    st.session_state.redraw_trigger += 1 # 캔버스 동기화
+                                    st.rerun()
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
                                 fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
@@ -334,6 +344,7 @@ if st.session_state.file_bytes:
                                     'img_path': img_path, 'label': st.session_state.active_label
                                 })
                                 st.session_state.selected_box_id = None
+                                st.session_state.redraw_trigger += 1 # [핵심 수정 3] 무한 루프 차단을 위한 동기화 신호
                                 st.rerun()
 
     # ==========================================
@@ -368,83 +379,4 @@ if st.session_state.file_bytes:
     with col_edit:
         if curr_anno:
             curr_lbl = curr_anno.get('label', '미지정')
-            st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
-
-            with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
-                copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력")
-                if st.button("📋 현재 좌표 일괄 복사 및 추출 실행"):
-                    target_pages = parse_page_ranges(copy_target_pages, total_pages)
-                    if target_pages:
-                        orig_rect = curr_anno['pdf_rect']
-                        for p_num in target_pages:
-                            if p_num - 1 == curr_anno['page_idx']: continue
-                            page = doc.load_page(p_num - 1)
-                            fit_rect = fitz.Rect(orig_rect)
-                            
-                            st.session_state.crop_counter += 1
-                            img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
-                            # [수정포인트] 매트릭스 크기를 (4,4)에서 (2,2)로 줄여 저장속도 향상
-                            page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fit_rect).save(img_path)
-                            
-                            basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
-                            
-                            st.session_state.annotations.append({
-                                'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_num - 1,
-                                'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
-                                'text': basic_text, 
-                                'ocr_text': "", # [수정포인트] 일괄 복사시 무거운 OCR 기능은 완전히 제외하여 무한 로딩 방지!
-                                'final_text': basic_text,
-                                'img_path': img_path, 'label': curr_lbl
-                            })
-                        st.session_state.redraw_trigger += 1
-                        st.rerun()
-
-            col_b, col_o = st.columns(2)
-            with col_b:
-                st.text_area("📝 기본 추출 (PyMuPDF)", value=curr_anno['text'], height=100, disabled=True)
-                st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
-            with col_o:
-                st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
-                st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
-                if st.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
-                    curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
-                    st.rerun()
-
-            st.markdown(f"<div style='border:1px solid #ddd; padding:10px; max-height:150px; overflow-y:auto;'>{get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))}</div>", unsafe_allow_html=True)
-            curr_anno['final_text'] = st.text_area("✨ 최종 교정 텍스트 (직접 수정 가능)", value=curr_anno.get('final_text', curr_anno['text']), height=text_area_height, key=f"final_input_{curr_anno['id']}", on_change=update_final_text, args=(curr_anno['id'],))
-
-            c1, c2, c3 = st.columns([1, 1, 2])
-            c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
-            
-            export_data = {
-                "meta": {"file": st.session_state.file_name, "type": st.session_state.doc_type},
-                "data": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text'])} for a in st.session_state.annotations]
-            }
-            c3.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="result.json", mime="application/json")
-
-# ==========================================
-# 6. 숨김 버튼 및 JavaScript (단축키 등)
-# ==========================================
-st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
-st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
-
-for i, lbl in enumerate(st.session_state.labels[:9]): st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
-st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
-
-raw_js = f"""
-window._current_active_rect = {active_rect_js};
-window._current_tag_mode = "{tag_mode}";
-if (!window._custom_js_injected) {{
-    window.insertDiffText = function(el) {{ /* ... existing diff text insertion logic ... */ }};
-    window.document.addEventListener('keydown', function(e) {{
-        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-        if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
-            if(e.ctrlKey) e.preventDefault();
-            const btn = Array.from(window.document.querySelectorAll('button')).find(el => el.innerText === 'HL_' + (parseInt(e.key)-1));
-            if (btn) btn.click();
-        }}
-    }});
-    window._custom_js_injected = true;
-}}
-"""
-st.markdown(f'<img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'));" style="display:none;" />', unsafe_allow_html=True)
+            st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_
