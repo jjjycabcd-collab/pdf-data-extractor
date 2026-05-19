@@ -44,7 +44,7 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0, 'ocr_lang': 'kor+eng', 'doc_type': '논문메타',
-    'exclude_keywords': '저자소개' 
+    'exclude_keywords': '저자소개', 'latest_canvas_coords': {}
 }
 
 for key, default in state_keys.items():
@@ -262,7 +262,7 @@ if st.session_state.file_bytes:
             ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
             # ==========================================
-            # [요청 반영] 상단 고정: 모드 전환 버튼 & 적용 버튼 나란히 배치
+            # 상단 고정: 모드 전환 버튼 & 적용 버튼 나란히 배치
             # ==========================================
             btn_mode_cols = st.columns([1, 1])
             with btn_mode_cols[0]:
@@ -271,7 +271,7 @@ if st.session_state.file_bytes:
             apply_resize_pressed = False
             with btn_mode_cols[1]:
                 if tag_mode == "transform":
-                    # 수정 모드일 때는 무조건 보이게 렌더링!
+                    # 수정 모드일 때는 무조건 보이게 렌더링
                     apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
 
             # 캔버스 렌더링
@@ -282,53 +282,68 @@ if st.session_state.file_bytes:
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.redraw_trigger}",
             )
 
-            # [적용 버튼 클릭 처리 로직]
-            if apply_resize_pressed:
-                if st.session_state.selected_box_id and canvas_result and canvas_result.json_data:
-                    objs = canvas_result.json_data.get("objects", [])
-                    # 현재 선택된 박스의 캔버스 최신 좌표 찾기
-                    target_obj = next((o for o in objs if o.get("id") == st.session_state.selected_box_id), None)
-                    
-                    if target_obj:
-                        n_x0 = target_obj['left'] / pdf_to_canvas_ratio
-                        n_y0 = target_obj['top'] / pdf_to_canvas_ratio
-                        n_x1 = n_x0 + (target_obj['width'] * target_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                        n_y1 = n_y0 + (target_obj['height'] * target_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-                        
-                        # 어노테이션 정보 업데이트 후 재추출
-                        for anno in st.session_state.annotations:
-                            if anno['id'] == st.session_state.selected_box_id:
-                                anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
-                                with st.spinner("영역 캡처 및 텍스트 재인식 중..."):
-                                    re_extract_annotation(anno, doc, anno['page_idx'])
-                                st.session_state.redraw_trigger += 1
-                                st.rerun()
-                else:
-                    st.warning("선택된 상자가 없습니다. 박스를 클릭하여 선택 후 적용해 주세요.")
-
+            # ==========================================
+            # [핵심 로직] 캔버스가 변할 때마다 최신 좌표를 세션에 안전하게 백업
+            # ==========================================
             if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
-                objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
-                
-                if tag_mode == "transform":
-                    if mode_toggle_pressed:
-                        st.session_state.selected_box_id = None
-                        st.rerun()
-                else:
-                    if mode_toggle_pressed:
-                        st.session_state.selected_box_id = None
-                        st.rerun()
+                for obj in canvas_result.json_data["objects"]:
+                    if "id" in obj:
+                        st.session_state.latest_canvas_coords[obj["id"]] = obj
+
+            # ==========================================
+            # 1. 모드 전환 버튼 핸들러
+            # ==========================================
+            if mode_toggle_pressed:
+                st.session_state.selected_box_id = None
+                st.session_state.redraw_trigger += 1
+                st.rerun()
+
+            # ==========================================
+            # 2. 크기/위치 적용 버튼 핸들러
+            # ==========================================
+            if apply_resize_pressed:
+                sid = st.session_state.selected_box_id
+                if sid and sid in st.session_state.latest_canvas_coords:
+                    obj = st.session_state.latest_canvas_coords[sid]
+                    n_x0 = obj['left'] / pdf_to_canvas_ratio
+                    n_y0 = obj['top'] / pdf_to_canvas_ratio
+                    n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                    n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                     
-                    # 새 박스 Drag해서 그렸을 때의 기본 로직
+                    for anno in st.session_state.annotations:
+                        if anno['id'] == sid:
+                            anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                            with st.spinner("영역 캡처 및 텍스트 재인식 중..."):
+                                re_extract_annotation(anno, doc, anno['page_idx'])
+                            break
+                
+                # 재추출 완료 후 자동으로 추가(Drag) 모드로 깔끔하게 복귀
+                st.session_state.selected_box_id = None
+                st.session_state.redraw_trigger += 1
+                st.rerun()
+
+            # ==========================================
+            # 3. 추가(Drag) 모드일 때의 상호작용 (박스 그리기 / 클릭 선택)
+            # ==========================================
+            if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
+                if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
+                    objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
+                    
+                    # 새로운 박스가 생성되었을 때
                     if len(objs) > len(fabric_objects):
                         new_obj = objs[-1]
                         obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
                         
                         if st.session_state.last_canvas_sig != obj_sig:
                             st.session_state.last_canvas_sig = obj_sig
-                            w, h = new_obj['width'] * new_obj.get('scaleX', 1), new_obj['height'] * new_obj.get('scaleY', 1)
-                            p_x0, p_y0 = new_obj["left"] / pdf_to_canvas_ratio, new_obj["top"] / pdf_to_canvas_ratio
-                            p_x1, p_y1 = p_x0 + (w / pdf_to_canvas_ratio), p_y0 + (h / pdf_to_canvas_ratio)
+                            w = new_obj['width'] * new_obj.get('scaleX', 1)
+                            h = new_obj['height'] * new_obj.get('scaleY', 1)
+                            p_x0 = new_obj["left"] / pdf_to_canvas_ratio
+                            p_y0 = new_obj["top"] / pdf_to_canvas_ratio
+                            p_x1 = p_x0 + (w / pdf_to_canvas_ratio)
+                            p_y1 = p_y0 + (h / pdf_to_canvas_ratio)
                             
+                            # 너무 작은 크기면 '클릭(선택)'으로 간주
                             if w < 10 and h < 10:
                                 cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
                                 clicked_id = None
@@ -340,7 +355,10 @@ if st.session_state.file_bytes:
                                             break
                                 if clicked_id:
                                     st.session_state.selected_box_id = clicked_id
+                                    st.session_state.redraw_trigger += 1
                                     st.rerun()
+                                    
+                            # 드래그로 영역을 그렸을 때 (추출)
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
                                 fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
@@ -368,6 +386,7 @@ if st.session_state.file_bytes:
                                     'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label
                                 })
                                 st.session_state.selected_box_id = None
+                                st.session_state.redraw_trigger += 1
                                 st.rerun()
 
     # ==========================================
@@ -390,6 +409,7 @@ if st.session_state.file_bytes:
             if selected_id != current_val:
                 st.session_state.selected_box_id = None if selected_id == "NEW_MODE" else selected_id
                 if selected_id != "NEW_MODE": st.session_state.current_page = anno_dict[selected_id]['page_idx']
+                st.session_state.redraw_trigger += 1
                 st.rerun()
                 
             st.markdown("---")
