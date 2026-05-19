@@ -1,4 +1,3 @@
-# pdf_utils.py
 import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
