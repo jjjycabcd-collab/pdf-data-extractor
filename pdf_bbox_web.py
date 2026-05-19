@@ -65,6 +65,7 @@ def get_cached_display_img(file_bytes, page_idx, canvas_w):
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     return display_img, canvas_h, canvas_w / pdf_w
 
+# [깜빡임 방지] 페이지 변경 등 정말 캔버스를 갈아엎어야 할 때만 redraw_trigger 증가
 def go_first(): st.session_state.current_page = 0; st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 def go_prev(): st.session_state.current_page = max(0, st.session_state.current_page - 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 def go_next(total_pages): st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
@@ -86,7 +87,7 @@ def delete_single_item(anno_id):
             st.session_state.annotations.pop(i)
             break
     st.session_state.selected_box_id = None
-    st.session_state.redraw_trigger += 1
+    st.session_state.redraw_trigger += 1  # 삭제 시에는 강제 새로고침 필요
 
 def update_label(aid):
     for a in st.session_state.annotations:
@@ -128,27 +129,18 @@ def re_extract_annotation(anno, doc, page_idx):
     anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
     anno['final_text'] = anno['text']
 
-# [핵심] Canvas가 id 속성을 몰래 지워버리는 것을 막기 위한 인덱스 기반 매칭 함수
 def get_canvas_obj(canvas_json, selected_id, annotations, current_page):
     if not canvas_json or "objects" not in canvas_json:
         return None
-    
-    # 1. 현재 페이지의 데이터 목록을 생성된 순서대로 가져옴
     page_annos = [a for a in annotations if a['page_idx'] == current_page]
-    
-    # 2. 선택된 박스가 몇 번째인지 인덱스를 찾음
     target_idx = -1
     for i, a in enumerate(page_annos):
         if a['id'] == selected_id:
             target_idx = i
             break
-            
     if target_idx == -1:
         return None
-        
-    # 3. Canvas 프론트엔드가 보내준 객체 중에서 rect 타입만 추려서 동일한 인덱스를 뽑아냄
     rects = [obj for obj in canvas_json["objects"] if obj.get("type") == "rect"]
-    
     if 0 <= target_idx < len(rects):
         return rects[target_idx]
     return None
@@ -276,33 +268,41 @@ if st.session_state.file_bytes:
                 if tag_mode == "transform":
                     apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
 
-            fabric_objects = []
-            for anno in st.session_state.annotations:
-                if anno['page_idx'] == st.session_state.current_page:
-                    r = anno['pdf_rect']
-                    is_sel = (st.session_state.selected_box_id == anno['id'])
-                    c_left, c_top = r[0] * pdf_to_canvas_ratio, r[1] * pdf_to_canvas_ratio
-                    c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
-                    
-                    if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
+            # [깜빡임 방지] 페이지가 바뀌거나 명시적으로 redraw_trigger가 올라갔을 때만 initial_drawing 세팅
+            if (
+                "current_drawing" not in st.session_state or 
+                st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
+                st.session_state.get("last_page_for_drawing") != st.session_state.current_page
+            ):
+                fabric_objects = []
+                for anno in st.session_state.annotations:
+                    if anno['page_idx'] == st.session_state.current_page:
+                        r = anno['pdf_rect']
+                        is_sel = (st.session_state.selected_box_id == anno['id'])
+                        c_left, c_top = r[0] * pdf_to_canvas_ratio, r[1] * pdf_to_canvas_ratio
+                        c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
                         
-                    fabric_objects.append({
-                        "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
-                        "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
-                        "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
-                        "strokeWidth": 3 if is_sel else 2, "id": anno['id']
-                    })
-            
-            initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
+                        if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
+                            
+                        fabric_objects.append({
+                            "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
+                            "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
+                            "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
+                            "strokeWidth": 3 if is_sel else 2, "id": anno['id']
+                        })
+                
+                st.session_state.current_drawing = {"version": "4.4.0", "objects": fabric_objects}
+                st.session_state.last_redraw_trigger = st.session_state.redraw_trigger
+                st.session_state.last_page_for_drawing = st.session_state.current_page
 
-            # key에 redraw_trigger를 부여해 강제 초기화 보장
+            # 캔버스는 redraw_trigger에 종속되게 구성하여, 불필요한 새로고침 차단
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 255, 0.1)", stroke_width=2, stroke_color="rgba(0, 0, 255, 0.8)",
                 background_image=display_img, 
-                initial_drawing=initial_drawing, 
+                initial_drawing=st.session_state.current_drawing, 
                 update_streamlit=True,
                 height=canvas_h, width=canvas_w, drawing_mode=tag_mode, display_toolbar=False,
-                key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.redraw_trigger}",
+                key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.last_redraw_trigger}",
             )
 
             # 모드 전환
@@ -311,11 +311,10 @@ if st.session_state.file_bytes:
                 st.session_state.redraw_trigger += 1
                 st.rerun()
 
-            # [해결 완료] 적용 버튼 로직
+            # 적용 버튼 로직
             if apply_resize_pressed:
                 sid = st.session_state.selected_box_id
                 
-                # 인덱스 매칭 방식을 사용해서 id가 없어져도 완벽하게 찾아냄
                 target_obj = get_canvas_obj(
                     canvas_result.json_data if canvas_result else None, 
                     sid, 
@@ -337,17 +336,17 @@ if st.session_state.file_bytes:
                             break
                     
                     st.session_state.selected_box_id = None
-                    st.session_state.redraw_trigger += 1
+                    st.session_state.redraw_trigger += 1 # 캔버스 새로고침을 위해 트리거 발동
                     st.rerun()
                 elif sid:
-                    st.warning("⚠️ 선택된 박스의 캔버스 정보를 찾을 수 없습니다. 인덱스 매칭에 실패했습니다.")
+                    st.warning("⚠️ 선택된 박스의 캔버스 정보를 찾을 수 없습니다. 다시 시도해 주세요.")
 
             # Drag 모드 상호작용
             if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
                 if canvas_result and canvas_result.json_data:
                     objs = [obj for obj in canvas_result.json_data.get("objects", []) if obj["type"] == "rect"]
                     
-                    if len(objs) > len(fabric_objects):
+                    if len(objs) > len(st.session_state.current_drawing.get("objects", [])):
                         new_obj = objs[-1]
                         obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
                         
@@ -445,7 +444,7 @@ if st.session_state.file_bytes:
 
     with col_edit:
         # ==========================================
-        # 🐞 디버그 상태창 (원인 파악용)
+        # 🐞 디버그 상태창
         # ==========================================
         st.markdown("### 🐞 디버그 상태창")
         st.write(f"**1. 선택된 박스 ID:** `{st.session_state.selected_box_id}`")
@@ -462,7 +461,7 @@ if st.session_state.file_bytes:
             n_y0 = current_canvas_obj['top'] / pdf_to_canvas_ratio
             n_x1 = n_x0 + (current_canvas_obj['width'] * current_canvas_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
             n_y1 = n_y0 + (current_canvas_obj['height'] * current_canvas_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-            st.write(f"**2. 캔버스 위 실시간 좌표:** `[{n_x0:.1f}, {n_y0:.1f}, {n_x1:.1f}, {n_y1:.1f}]` ✅ (인덱스 매칭 성공)")
+            st.write(f"**2. 캔버스 위 실시간 좌표:** `[{n_x0:.1f}, {n_y0:.1f}, {n_x1:.1f}, {n_y1:.1f}]` ✅")
         else:
             st.write("**2. 캔버스 위 실시간 좌표:** `(객체 정보 없음)` ❌")
             
