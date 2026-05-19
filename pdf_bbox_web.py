@@ -171,27 +171,20 @@ doc_types = ['논문메타', '논문전문', '단행본', '기타']
 st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=doc_types, index=doc_types.index(st.session_state.doc_type) if st.session_state.doc_type in doc_types else 0)
 
 # ---------------------------------------------------------
-# [신규 추가] 프로그램 명세서(SPA) 링크 버튼 렌더링
+# [수정됨] 프로그램 명세서(SPA) 링크 버튼 렌더링 (GitHub Pages 우회)
 # ---------------------------------------------------------
-try:
-    with open("manual.html", "r", encoding="utf-8") as f:
-        html_content = f.read()
-    
-    b64_html = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
-    
-    link_html = f'''
-        <a href="data:text/html;base64,{b64_html}" target="_blank" 
-           style="display: block; width: 100%; text-align: center; padding: 10px; 
-                  background-color: #0f766e; color: white; text-decoration: none; 
-                  border-radius: 6px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;
-                  box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background-color 0.2s;">
-           📖 프로그램 명세서 보기 (새 창)
-        </a>
-    '''
-    st.sidebar.markdown(link_html, unsafe_allow_html=True)
-except FileNotFoundError:
-    # manual.html 파일이 아직 업로드되지 않은 경우 안내 메시지 출력
-    st.sidebar.info("💡 'manual.html' 파일을 동일한 폴더에 업로드하면 명세서 버튼이 활성화됩니다.")
+github_html_url = "https://htmlpreview.github.io/?https://github.com/jjjycabcd-collab/pdf-data-extractor/blob/main/manual.html"
+
+link_html = f'''
+    <a href="{github_html_url}" target="_blank" 
+       style="display: block; width: 100%; text-align: center; padding: 10px; 
+              background-color: #0f766e; color: white; text-decoration: none; 
+              border-radius: 6px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background-color 0.2s;">
+       📖 프로그램 명세서 보기 (새 창)
+    </a>
+'''
+st.sidebar.markdown(link_html, unsafe_allow_html=True)
 # ---------------------------------------------------------
 
 st.sidebar.markdown("---")
