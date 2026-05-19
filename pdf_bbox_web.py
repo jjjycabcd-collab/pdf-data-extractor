@@ -44,7 +44,7 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0, 'ocr_lang': 'kor+eng', 'doc_type': '논문메타',
-    'exclude_keywords': '저자소개', 'latest_canvas_coords': {}
+    'exclude_keywords': '저자소개'
 }
 
 for key, default in state_keys.items():
@@ -65,16 +65,17 @@ def get_cached_display_img(file_bytes, page_idx, canvas_w):
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     return display_img, canvas_h, canvas_w / pdf_w
 
-def go_first(): st.session_state.current_page = 0; st.session_state.selected_box_id = None
-def go_prev(): st.session_state.current_page = max(0, st.session_state.current_page - 1); st.session_state.selected_box_id = None
-def go_next(total_pages): st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1); st.session_state.selected_box_id = None
-def go_last(total_pages): st.session_state.current_page = max(0, total_pages - 1); st.session_state.selected_box_id = None
+def go_first(): st.session_state.current_page = 0; st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
+def go_prev(): st.session_state.current_page = max(0, st.session_state.current_page - 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
+def go_next(total_pages): st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
+def go_last(total_pages): st.session_state.current_page = max(0, total_pages - 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 
 def page_input_changed():
     target = st.session_state.page_input_widget - 1
     if target != st.session_state.current_page:
         st.session_state.current_page = target
         st.session_state.selected_box_id = None
+        st.session_state.redraw_trigger += 1
 
 def delete_single_item(anno_id):
     for i, a in enumerate(st.session_state.annotations):
@@ -94,7 +95,7 @@ def update_label(aid):
             break
 
 def set_active_label(lbl): st.session_state.active_label = lbl
-def handle_esc(): st.session_state.selected_box_id = None
+def handle_esc(): st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 
 def apply_text_to_final(aid, source_type):
     for a in st.session_state.annotations:
@@ -222,26 +223,7 @@ if st.session_state.file_bytes:
     if display_img is None:
         st.error("PDF 페이지를 로드할 수 없습니다.")
         st.stop()
-
-    fabric_objects = []
     
-    for anno in st.session_state.annotations:
-        if anno['page_idx'] == st.session_state.current_page:
-            r = anno['pdf_rect']
-            is_sel = (st.session_state.selected_box_id == anno['id'])
-            c_left, c_top = r[0] * pdf_to_canvas_ratio, r[1] * pdf_to_canvas_ratio
-            c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
-            
-            if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
-                
-            fabric_objects.append({
-                "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
-                "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
-                "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
-                "strokeWidth": 3 if is_sel else 2, "id": anno['id']
-            })
-    
-    initial_drawing = {"version": "4.4.0", "objects": fabric_objects}
     tag_mode = "transform" if st.session_state.selected_box_id else "rect"
 
     st.write("### PDF 상호작용 구축 도구")
@@ -262,7 +244,7 @@ if st.session_state.file_bytes:
             ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
             # ==========================================
-            # 상단 고정: 모드 전환 버튼 & 적용 버튼 나란히 배치
+            # 상단 고정 UI: 모드 전환 & 적용 버튼
             # ==========================================
             btn_mode_cols = st.columns([1, 1])
             with btn_mode_cols[0]:
@@ -271,27 +253,49 @@ if st.session_state.file_bytes:
             apply_resize_pressed = False
             with btn_mode_cols[1]:
                 if tag_mode == "transform":
-                    # 수정 모드일 때는 무조건 보이게 렌더링
                     apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
 
-            # 캔버스 렌더링
+            # ==========================================
+            # [핵심 깜빡임 방지 로직] 캔버스 초기화 캐싱
+            # ==========================================
+            if (
+                "current_drawing" not in st.session_state or 
+                st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
+                st.session_state.get("last_page_for_drawing") != st.session_state.current_page
+            ):
+                fabric_objects = []
+                for anno in st.session_state.annotations:
+                    if anno['page_idx'] == st.session_state.current_page:
+                        r = anno['pdf_rect']
+                        is_sel = (st.session_state.selected_box_id == anno['id'])
+                        c_left, c_top = r[0] * pdf_to_canvas_ratio, r[1] * pdf_to_canvas_ratio
+                        c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
+                        
+                        if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
+                            
+                        fabric_objects.append({
+                            "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
+                            "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
+                            "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
+                            "strokeWidth": 3 if is_sel else 2, "id": anno['id']
+                        })
+                
+                st.session_state.current_drawing = {"version": "4.4.0", "objects": fabric_objects}
+                st.session_state.last_redraw_trigger = st.session_state.redraw_trigger
+                st.session_state.last_page_for_drawing = st.session_state.current_page
+
+            # 깜빡임을 방지하기 위해 key에서 redraw_trigger를 제거합니다 (페이지 변경시에만 리셋)
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 255, 0.1)", stroke_width=2, stroke_color="rgba(0, 0, 255, 0.8)",
-                background_image=display_img, initial_drawing=initial_drawing, update_streamlit=True,
+                background_image=display_img, 
+                initial_drawing=st.session_state.current_drawing, 
+                update_streamlit=True,
                 height=canvas_h, width=canvas_w, drawing_mode=tag_mode, display_toolbar=False,
-                key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.redraw_trigger}",
+                key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}",
             )
 
             # ==========================================
-            # [핵심 로직] 캔버스가 변할 때마다 최신 좌표를 세션에 안전하게 백업
-            # ==========================================
-            if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
-                for obj in canvas_result.json_data["objects"]:
-                    if "id" in obj:
-                        st.session_state.latest_canvas_coords[obj["id"]] = obj
-
-            # ==========================================
-            # 1. 모드 전환 버튼 핸들러
+            # 1. 모드 전환 로직
             # ==========================================
             if mode_toggle_pressed:
                 st.session_state.selected_box_id = None
@@ -299,51 +303,51 @@ if st.session_state.file_bytes:
                 st.rerun()
 
             # ==========================================
-            # 2. 크기/위치 적용 버튼 핸들러
+            # 2. 크기/위치 적용 버튼 로직 (드래그 -> 버튼 클릭 -> 적용 및 모드 해제)
             # ==========================================
             if apply_resize_pressed:
-                sid = st.session_state.selected_box_id
-                if sid and sid in st.session_state.latest_canvas_coords:
-                    obj = st.session_state.latest_canvas_coords[sid]
-                    n_x0 = obj['left'] / pdf_to_canvas_ratio
-                    n_y0 = obj['top'] / pdf_to_canvas_ratio
-                    n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                    n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                if st.session_state.selected_box_id and canvas_result and canvas_result.json_data:
+                    objs = canvas_result.json_data.get("objects", [])
+                    # 사용자가 캔버스에서 조절한 최신 크기 정보를 가져옵니다.
+                    target_obj = next((o for o in objs if o.get("id") == st.session_state.selected_box_id), None)
                     
-                    for anno in st.session_state.annotations:
-                        if anno['id'] == sid:
-                            anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
-                            with st.spinner("영역 캡처 및 텍스트 재인식 중..."):
-                                re_extract_annotation(anno, doc, anno['page_idx'])
-                            break
+                    if target_obj:
+                        n_x0 = target_obj['left'] / pdf_to_canvas_ratio
+                        n_y0 = target_obj['top'] / pdf_to_canvas_ratio
+                        n_x1 = n_x0 + (target_obj['width'] * target_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                        n_y1 = n_y0 + (target_obj['height'] * target_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                        
+                        for anno in st.session_state.annotations:
+                            if anno['id'] == st.session_state.selected_box_id:
+                                anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                                with st.spinner("변경된 영역 캡처 및 OCR 재인식 중..."):
+                                    re_extract_annotation(anno, doc, anno['page_idx'])
+                                break
                 
-                # 재추출 완료 후 자동으로 추가(Drag) 모드로 깔끔하게 복귀
+                # 재추출이 끝나면 깔끔하게 선택을 해제하여 추가(Drag) 모드로 복귀
                 st.session_state.selected_box_id = None
                 st.session_state.redraw_trigger += 1
                 st.rerun()
 
             # ==========================================
-            # 3. 추가(Drag) 모드일 때의 상호작용 (박스 그리기 / 클릭 선택)
+            # 3. 추가(Drag) 모드 상호작용 로직
             # ==========================================
             if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
-                if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
-                    objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
+                if canvas_result and canvas_result.json_data:
+                    objs = [obj for obj in canvas_result.json_data.get("objects", []) if obj["type"] == "rect"]
                     
-                    # 새로운 박스가 생성되었을 때
-                    if len(objs) > len(fabric_objects):
+                    # 새로운 박스가 생성된 경우
+                    if len(objs) > len(st.session_state.current_drawing.get("objects", [])):
                         new_obj = objs[-1]
                         obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
                         
                         if st.session_state.last_canvas_sig != obj_sig:
                             st.session_state.last_canvas_sig = obj_sig
-                            w = new_obj['width'] * new_obj.get('scaleX', 1)
-                            h = new_obj['height'] * new_obj.get('scaleY', 1)
-                            p_x0 = new_obj["left"] / pdf_to_canvas_ratio
-                            p_y0 = new_obj["top"] / pdf_to_canvas_ratio
-                            p_x1 = p_x0 + (w / pdf_to_canvas_ratio)
-                            p_y1 = p_y0 + (h / pdf_to_canvas_ratio)
+                            w, h = new_obj['width'] * new_obj.get('scaleX', 1), new_obj['height'] * new_obj.get('scaleY', 1)
+                            p_x0, p_y0 = new_obj["left"] / pdf_to_canvas_ratio, new_obj["top"] / pdf_to_canvas_ratio
+                            p_x1, p_y1 = p_x0 + (w / pdf_to_canvas_ratio), p_y0 + (h / pdf_to_canvas_ratio)
                             
-                            # 너무 작은 크기면 '클릭(선택)'으로 간주
+                            # 크기가 너무 작으면 클릭(선택)으로 간주
                             if w < 10 and h < 10:
                                 cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
                                 clicked_id = None
@@ -358,7 +362,7 @@ if st.session_state.file_bytes:
                                     st.session_state.redraw_trigger += 1
                                     st.rerun()
                                     
-                            # 드래그로 영역을 그렸을 때 (추출)
+                            # 드래그하여 정상적으로 박스를 그렸을 때 (추출)
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
                                 fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
