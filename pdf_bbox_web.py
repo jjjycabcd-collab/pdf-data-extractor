@@ -21,9 +21,11 @@ st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - We
 active_rect_js = "null"
 tag_mode = "rect"
 
+# [변경점] Streamlit의 'Running...' 인디케이터를 완전히 숨겨 화면 껌뻑임을 줄임
 st.markdown(
     """
     <style>
+    div[data-testid="stStatusWidget"] { visibility: hidden; display: none !important; }
     button[title^="hidden"] { display: none !important; }
     div[data-testid="stButton"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
     div[data-testid="stTooltipHoverTarget"]:has(button[title^="hidden"]) { display: none !important; height: 0px; margin: 0px; padding: 0px; }
@@ -57,7 +59,9 @@ os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 # ==========================================
 # 2. 캐싱 및 유틸리티 함수
 # ==========================================
-@st.cache_data(show_spinner=False)
+# [핵심 변경점] cache_data -> cache_resource 로 변경. 
+# 매번 복사본을 만들지 않고 동일한 이미지 객체를 반환하여 캔버스 플래시(깜빡임) 방지!
+@st.cache_resource(show_spinner=False)
 def get_cached_display_img(file_bytes, page_idx, canvas_w):
     full_bg, pdf_w, pdf_h = get_page_image(file_bytes, page_idx)
     if full_bg is None: return None, 0, 1.0
@@ -65,7 +69,6 @@ def get_cached_display_img(file_bytes, page_idx, canvas_w):
     display_img = full_bg.resize((canvas_w, canvas_h), Image.LANCZOS).convert("RGBA")
     return display_img, canvas_h, canvas_w / pdf_w
 
-# [깜빡임 방지] 페이지 변경 등 정말 캔버스를 갈아엎어야 할 때만 redraw_trigger 증가
 def go_first(): st.session_state.current_page = 0; st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 def go_prev(): st.session_state.current_page = max(0, st.session_state.current_page - 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
 def go_next(total_pages): st.session_state.current_page = min(total_pages - 1, st.session_state.current_page + 1); st.session_state.selected_box_id = None; st.session_state.redraw_trigger += 1
@@ -87,7 +90,7 @@ def delete_single_item(anno_id):
             st.session_state.annotations.pop(i)
             break
     st.session_state.selected_box_id = None
-    st.session_state.redraw_trigger += 1  # 삭제 시에는 강제 새로고침 필요
+    st.session_state.redraw_trigger += 1
 
 def update_label(aid):
     for a in st.session_state.annotations:
@@ -268,7 +271,6 @@ if st.session_state.file_bytes:
                 if tag_mode == "transform":
                     apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
 
-            # [깜빡임 방지] 페이지가 바뀌거나 명시적으로 redraw_trigger가 올라갔을 때만 initial_drawing 세팅
             if (
                 "current_drawing" not in st.session_state or 
                 st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
@@ -295,13 +297,13 @@ if st.session_state.file_bytes:
                 st.session_state.last_redraw_trigger = st.session_state.redraw_trigger
                 st.session_state.last_page_for_drawing = st.session_state.current_page
 
-            # 캔버스는 redraw_trigger에 종속되게 구성하여, 불필요한 새로고침 차단
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 255, 0.1)", stroke_width=2, stroke_color="rgba(0, 0, 255, 0.8)",
                 background_image=display_img, 
                 initial_drawing=st.session_state.current_drawing, 
                 update_streamlit=True,
                 height=canvas_h, width=canvas_w, drawing_mode=tag_mode, display_toolbar=False,
+                # Key에 last_redraw_trigger만 의존시켜 드래그 시 캔버스가 죽는(Remount) 현상 방지
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.last_redraw_trigger}",
             )
 
@@ -336,7 +338,7 @@ if st.session_state.file_bytes:
                             break
                     
                     st.session_state.selected_box_id = None
-                    st.session_state.redraw_trigger += 1 # 캔버스 새로고침을 위해 트리거 발동
+                    st.session_state.redraw_trigger += 1
                     st.rerun()
                 elif sid:
                     st.warning("⚠️ 선택된 박스의 캔버스 정보를 찾을 수 없습니다. 다시 시도해 주세요.")
@@ -568,6 +570,7 @@ if st.session_state.file_bytes:
 # ==========================================
 # 6. 숨김 버튼 및 JavaScript (단축키 등)
 # ==========================================
+# [변경점] DOM Reflow를 유발하는 <img> 태그 대신, 안전하고 투명한 <div> 래퍼를 사용하여 화면 번쩍임 추가 방지
 st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
 st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
 
@@ -623,4 +626,5 @@ if (!window._custom_js_injected) {{
     window._custom_js_injected = true;
 }}
 """
-st.markdown(f'<img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'));" style="display:none;" />', unsafe_allow_html=True)
+# 보이지 않는 래퍼를 사용해 DOM 충돌 완화
+st.markdown(f'<div style="display:none; height:0; width:0; overflow:hidden;"><img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'))" /></div>', unsafe_allow_html=True)
