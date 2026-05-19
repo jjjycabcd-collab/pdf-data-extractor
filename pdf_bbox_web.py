@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import fitz  # PyMuPDF
 import json
 import os
@@ -18,27 +17,6 @@ from pdf_utils import (
 # 1. 페이지 및 상태 초기화
 # ==========================================
 st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - Web Editor")
-
-# ---------------------------------------------------------
-# [신규 통합 기능] 화면 모드 전환 (에디터 vs 명세서)
-# ---------------------------------------------------------
-st.sidebar.markdown("### 🖥️ 화면 모드")
-app_mode = st.sidebar.radio("모드 선택", ["🛠️ 데이터 구축 에디터", "📖 프로그램 명세서"], label_visibility="collapsed")
-st.sidebar.markdown("---")
-
-# '프로그램 명세서'가 선택된 경우 HTML을 앱 내부에 직접 렌더링하고 실행 종료
-if app_mode == "📖 프로그램 명세서":
-    try:
-        with open("manual.html", "r", encoding="utf-8") as f:
-            html_content = f.read()
-        # 외부 링크 없이 iframe 형태로 Streamlit 화면에 완벽하게 삽입됩니다.
-        components.html(html_content, height=850, scrolling=True)
-    except FileNotFoundError:
-        st.error("💡 'manual.html' 파일을 찾을 수 없습니다. 파이썬 스크립트와 동일한 폴더에 업로드되어 있는지 확인해 주세요.")
-    
-    # 명세서 화면만 보여주고, 아래 에디터 코드는 실행하지 않도록 차단
-    st.stop()
-# ---------------------------------------------------------
 
 active_rect_js = "null"
 tag_mode = "rect"
@@ -67,7 +45,7 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0, 'ocr_lang': 'kor+eng', 'doc_type': '단행본',
-    'exclude_keywords': '저자소개',
+    'exclude_keywords': '저자소개', # UI는 제거하되, 백엔드 필터링 기능 유지를 위해 상태값 보존
     'grouping_mode': False, 'active_group_id': 'G1'
 }
 
@@ -186,11 +164,28 @@ def get_next_group_id(annotations):
     return f"G{max_g + 1}"
 
 # ==========================================
-# 3. 사이드바 구성 (에디터 전용)
+# 3. 사이드바 구성
 # ==========================================
 st.sidebar.markdown("### 📚 문서 메타데이터 설정")
 doc_types = ['논문메타', '논문전문', '단행본', '기타']
 st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=doc_types, index=doc_types.index(st.session_state.doc_type) if st.session_state.doc_type in doc_types else 0)
+
+# ---------------------------------------------------------
+# [수정됨] 프로그램 명세서(SPA) 링크 버튼 렌더링 (GitHub Pages 우회)
+# ---------------------------------------------------------
+github_html_url = "https://htmlpreview.github.io/?https://github.com/jjjycabcd-collab/pdf-data-extractor/blob/main/manual.html"
+
+link_html = f'''
+    <a href="{github_html_url}" target="_blank" 
+       style="display: block; width: 100%; text-align: center; padding: 10px; 
+              background-color: #0f766e; color: white; text-decoration: none; 
+              border-radius: 6px; font-weight: bold; margin-top: 15px; margin-bottom: 25px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background-color 0.2s;">
+       📖 프로그램 명세서 보기 (새 창)
+    </a>
+'''
+st.sidebar.markdown(link_html, unsafe_allow_html=True)
+# ---------------------------------------------------------
 
 st.sidebar.markdown("---")
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
@@ -300,4 +295,392 @@ if st.session_state.file_bytes:
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기", value=True)
     st.markdown("---")
 
-    col_pdf, col_right = st.columns([6, 4]) if show_pdf else (None,
+    col_pdf, col_right = st.columns([6, 4]) if show_pdf else (None, st.container())
+    col_list_img, col_edit = st.columns([4, 6]) if not show_pdf else (col_right, col_right)
+
+    if col_pdf:
+        with col_pdf:
+            ctrl_cols = st.columns([1.2, 1.2, 2, 1.2, 1.2, 2])
+            ctrl_cols[0].button("⏮", on_click=go_first, use_container_width=True)
+            ctrl_cols[1].button("◀", on_click=go_prev, use_container_width=True)
+            ctrl_cols[2].number_input("페이지 입력", min_value=1, max_value=total_pages, value=st.session_state.current_page + 1, on_change=page_input_changed, key="page_input_widget", label_visibility="collapsed")
+            ctrl_cols[3].button("▶", on_click=go_next, args=(total_pages,), use_container_width=True)
+            ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True)
+            ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
+
+            btn_mode_cols = st.columns([1, 1, 1.5, 1.3])
+            
+            with btn_mode_cols[0]:
+                mode_toggle_pressed = st.button("🔄 모드 전환", use_container_width=True, disabled=st.session_state.grouping_mode)
+            
+            apply_resize_pressed = False
+            with btn_mode_cols[1]:
+                if tag_mode == "transform" and not st.session_state.grouping_mode:
+                    apply_resize_pressed = st.button("✅ 크기 적용", type="primary", use_container_width=True)
+            
+            with btn_mode_cols[2]:
+                new_g_mode = st.toggle(f"🔗 그룹 묶기 모드 ({st.session_state.active_group_id})", value=st.session_state.grouping_mode)
+                if new_g_mode != st.session_state.grouping_mode:
+                    st.session_state.grouping_mode = new_g_mode
+                    st.session_state.selected_box_id = None
+                    st.session_state.redraw_trigger += 1
+                    st.rerun()
+                    
+            with btn_mode_cols[3]:
+                if st.session_state.grouping_mode:
+                    next_id = get_next_group_id(st.session_state.annotations)
+                    if st.button(f"➕ 다음 번호({next_id}) 갱신", use_container_width=True):
+                        st.session_state.active_group_id = next_id
+                        st.rerun()
+
+            if (
+                "current_drawing" not in st.session_state or 
+                st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
+                st.session_state.get("last_page_for_drawing") != st.session_state.current_page
+            ):
+                fabric_objects = []
+                for anno in st.session_state.annotations:
+                    if anno['page_idx'] == st.session_state.current_page:
+                        r = anno['pdf_rect']
+                        is_sel = (st.session_state.selected_box_id == anno['id'])
+                        c_left, c_top = r[0] * pdf_to_canvas_ratio, r[1] * pdf_to_canvas_ratio
+                        c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
+                        
+                        if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
+                        
+                        is_target_group = st.session_state.grouping_mode and anno.get('group_id') == st.session_state.active_group_id
+                        has_group = bool(anno.get('group_id'))
+                        
+                        if is_sel:
+                            s_col, f_col, s_wid = "rgba(255, 0, 0, 0.9)", "rgba(255, 0, 0, 0.2)", 3
+                        elif is_target_group:
+                            s_col, f_col, s_wid = "rgba(0, 180, 0, 0.9)", "rgba(0, 180, 0, 0.3)", 3
+                        elif has_group:
+                            s_col, f_col, s_wid = "rgba(255, 140, 0, 0.9)", "rgba(255, 140, 0, 0.2)", 2
+                        else:
+                            s_col, f_col, s_wid = "rgba(0, 0, 255, 0.7)", "rgba(0, 0, 255, 0.1)", 2
+                            
+                        fabric_objects.append({
+                            "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
+                            "fill": f_col, "stroke": s_col, "strokeWidth": s_wid, "id": anno['id']
+                        })
+                
+                st.session_state.current_drawing = {"version": "4.4.0", "objects": fabric_objects}
+                st.session_state.last_redraw_trigger = st.session_state.redraw_trigger
+                st.session_state.last_page_for_drawing = st.session_state.current_page
+
+            canvas_result = st_canvas(
+                fill_color="rgba(0, 0, 255, 0.1)", stroke_width=2, stroke_color="rgba(0, 0, 255, 0.8)",
+                background_image=display_img, 
+                initial_drawing=st.session_state.current_drawing, 
+                update_streamlit=True,
+                height=canvas_h, width=canvas_w, drawing_mode=tag_mode, display_toolbar=False,
+                key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.last_redraw_trigger}",
+            )
+
+            if mode_toggle_pressed:
+                st.session_state.selected_box_id = None
+                st.session_state.redraw_trigger += 1
+                st.rerun()
+
+            if apply_resize_pressed:
+                sid = st.session_state.selected_box_id
+                target_obj = get_canvas_obj(
+                    canvas_result.json_data if canvas_result else None, 
+                    sid, 
+                    st.session_state.annotations, 
+                    st.session_state.current_page
+                )
+                
+                if sid and target_obj:
+                    n_x0 = target_obj['left'] / pdf_to_canvas_ratio
+                    n_y0 = target_obj['top'] / pdf_to_canvas_ratio
+                    n_x1 = n_x0 + (target_obj['width'] * target_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                    n_y1 = n_y0 + (target_obj['height'] * target_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                    
+                    for anno in st.session_state.annotations:
+                        if anno['id'] == sid:
+                            anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                            with st.spinner("변경된 영역 캡처 및 OCR 재인식 중..."):
+                                re_extract_annotation(anno, doc, anno['page_idx'])
+                            break
+                    
+                    st.session_state.selected_box_id = None
+                    st.session_state.redraw_trigger += 1
+                    st.rerun()
+
+            if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
+                if canvas_result and canvas_result.json_data:
+                    objs = [obj for obj in canvas_result.json_data.get("objects", []) if obj["type"] == "rect"]
+                    
+                    if len(objs) > len(st.session_state.current_drawing.get("objects", [])):
+                        new_obj = objs[-1]
+                        obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
+                        
+                        if st.session_state.last_canvas_sig != obj_sig:
+                            st.session_state.last_canvas_sig = obj_sig
+                            w, h = new_obj['width'] * new_obj.get('scaleX', 1), new_obj['height'] * new_obj.get('scaleY', 1)
+                            p_x0, p_y0 = new_obj["left"] / pdf_to_canvas_ratio, new_obj["top"] / pdf_to_canvas_ratio
+                            p_x1, p_y1 = p_x0 + (w / pdf_to_canvas_ratio), p_y0 + (h / pdf_to_canvas_ratio)
+                            
+                            if w < 10 and h < 10:
+                                cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
+                                clicked_id = None
+                                for a in reversed(st.session_state.annotations):
+                                    if a['page_idx'] == st.session_state.current_page:
+                                        r = a['pdf_rect']
+                                        if r[0] <= cx <= r[2] and r[1] <= cy <= r[3]:
+                                            clicked_id = a['id']
+                                            break
+                                if clicked_id:
+                                    if st.session_state.grouping_mode:
+                                        for a in st.session_state.annotations:
+                                            if a['id'] == clicked_id:
+                                                if a.get('group_id') == st.session_state.active_group_id:
+                                                    a['group_id'] = ""
+                                                else:
+                                                    a['group_id'] = st.session_state.active_group_id
+                                                break
+                                    else:
+                                        st.session_state.selected_box_id = clicked_id
+                                        
+                                    st.session_state.redraw_trigger += 1
+                                    st.rerun()
+                                    
+                            elif w >= 10 and h >= 10:
+                                page = doc.load_page(st.session_state.current_page)
+                                fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
+                                
+                                if autofit_enabled:
+                                    words = page.get_text("words")
+                                    matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
+                                    if matched:
+                                        new_rect = matched[0]
+                                        for r in matched[1:]: new_rect |= r
+                                        fit_rect = new_rect
+                                
+                                st.session_state.crop_counter += 1
+                                img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+                                img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
+                                page.get_pixmap(matrix=fitz.Matrix(2 if (fit_rect.y1-fit_rect.y0)>50 else 4, 2 if (fit_rect.y1-fit_rect.y0)>50 else 4), clip=fit_rect).save(img_path)
+                                
+                                basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
+                                ocr_text = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                                
+                                initial_group = st.session_state.active_group_id if st.session_state.grouping_mode else ""
+                                
+                                st.session_state.annotations.append({
+                                    'id': f"id_{st.session_state.crop_counter}", 'page_idx': st.session_state.current_page,
+                                    'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
+                                    'text': basic_text, 'ocr_text': ocr_text, 'final_text': basic_text,
+                                    'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label,
+                                    'group_id': initial_group
+                                })
+                                st.session_state.selected_box_id = None
+                                st.session_state.redraw_trigger += 1
+                                st.rerun()
+
+    # ==========================================
+    # 5. 추출 데이터 목록 및 편집 패널
+    # ==========================================
+    anno_dict = {a['id']: a for a in st.session_state.annotations} if st.session_state.annotations else {}
+
+    with col_list_img:
+        st.subheader("데이터 추출 목록")
+        if anno_dict:
+            radio_options = ["NEW_MODE"] + list(anno_dict.keys())
+            def format_label(aid):
+                if aid == "NEW_MODE": return "✨ [신규 추출 대기 중]"
+                a = anno_dict[aid]
+                group_tag = f" 🔗[{a['group_id']}]" if a.get('group_id') else ""
+                return f"[P{a['page_idx']+1}] [{a.get('label', '미지정')}]{group_tag} | {a.get('final_text', a['text'])[:15].replace(chr(10), ' ')}..."
+
+            current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in anno_dict else "NEW_MODE"
+            selected_id = st.radio("목록", options=radio_options, format_func=format_label, index=radio_options.index(current_val), label_visibility="collapsed")
+            
+            if selected_id != current_val:
+                st.session_state.selected_box_id = None if selected_id == "NEW_MODE" else selected_id
+                if selected_id != "NEW_MODE": st.session_state.current_page = anno_dict[selected_id]['page_idx']
+                st.session_state.redraw_trigger += 1
+                st.rerun()
+                
+            st.markdown("---")
+            if st.button("🔄 현재 페이지 일괄 재인식 (OCR)", use_container_width=True):
+                updated_count = 0
+                for a in st.session_state.annotations:
+                    if a['page_idx'] == st.session_state.current_page and os.path.exists(a['img_path']):
+                        a['ocr_text'] = extract_text_via_ocr(a['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                        updated_count += 1
+                if updated_count > 0:
+                    st.success(f"현재 페이지의 {updated_count}개 항목이 성공적으로 재인식되었습니다!")
+                    st.rerun()
+
+            curr_anno = anno_dict.get(st.session_state.selected_box_id)
+            if curr_anno and os.path.exists(curr_anno['img_path']):
+                st.markdown("<br>", unsafe_allow_html=True)
+                with open(curr_anno['img_path'], "rb") as img_file: st.image(img_file.read(), use_column_width=True)
+        else:
+            st.info("추출된 데이터가 없습니다. PDF를 드래그하세요.")
+            curr_anno = None
+
+    with col_edit:
+        # 디버그 창 UI 제거됨
+        if curr_anno:
+            lbl_col, grp_col = st.columns([6, 4])
+            with lbl_col:
+                curr_lbl = curr_anno.get('label', '미지정')
+                st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
+            
+            with grp_col:
+                curr_group = curr_anno.get('group_id', "")
+                st.text_input("🔗 소속 그룹", value=curr_group, placeholder="예: G1", key=f"group_sel_{curr_anno['id']}", on_change=update_group_id, args=(curr_anno['id'],))
+
+            with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
+                copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력", key=f"bulk_txt_{curr_anno['id']}")
+                if st.button("📋 현재 좌표 일괄 복사 및 추출 실행", key=f"bulk_btn_{curr_anno['id']}"):
+                    target_pages = parse_page_ranges(copy_target_pages, total_pages)
+                    if target_pages:
+                        orig_rect = curr_anno['pdf_rect']
+                        copy_count = 0
+                        for p_num in target_pages:
+                            if p_num - 1 == curr_anno['page_idx']: continue
+                            
+                            page = doc.load_page(p_num - 1)
+                            fit_rect = fitz.Rect(orig_rect)
+                            
+                            is_dup = False
+                            for existing in st.session_state.annotations:
+                                if existing['page_idx'] == p_num - 1 and existing.get('label') == curr_lbl:
+                                    ex_r = existing['pdf_rect']
+                                    if abs(ex_r[0] - fit_rect.x0) < 5 and abs(ex_r[1] - fit_rect.y0) < 5:
+                                        is_dup = True
+                                        break
+                            if is_dup: continue
+                            
+                            st.session_state.crop_counter += 1
+                            img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+                            img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
+                            page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fit_rect).save(img_path)
+                            
+                            basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
+                            
+                            st.session_state.annotations.append({
+                                'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_num - 1,
+                                'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
+                                'text': basic_text, 
+                                'ocr_text': "", 
+                                'final_text': basic_text,
+                                'img_name': img_name, 'img_path': img_path, 'label': curr_lbl,
+                                'group_id': curr_group
+                            })
+                            copy_count += 1
+                            
+                        if copy_count > 0:
+                            st.success(f"{copy_count}개 페이지에 영역 복사가 완료되었습니다!")
+                            st.session_state.redraw_trigger += 1
+                            st.rerun()
+                        else:
+                            st.warning("이미 복사되었거나 유효한 대상 페이지가 없습니다.")
+
+            col_b, col_o = st.columns(2)
+            with col_b:
+                st.text_area("📝 기본 추출 (PyMuPDF)", value=curr_anno['text'], height=100, disabled=True)
+                st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
+            with col_o:
+                st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
+                st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
+                if st.button("🔄 선택 항목 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
+                    curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                    st.rerun()
+
+            st.markdown(f"<div style='border:1px solid #ddd; padding:10px; max-height:150px; overflow-y:auto;'>{get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))}</div>", unsafe_allow_html=True)
+            curr_anno['final_text'] = st.text_area("✨ 최종 교정 텍스트 (직접 수정 가능)", value=curr_anno.get('final_text', curr_anno['text']), height=text_area_height, key=f"final_input_{curr_anno['id']}", on_change=update_final_text, args=(curr_anno['id'],))
+
+            c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
+            
+            c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
+            
+            if c2.button("💾 저장"):
+                st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
+            
+            md_text = f"# 문서 추출 데이터 ({st.session_state.doc_type})\n\n"
+            for a in st.session_state.annotations:
+                r = a['pdf_rect']
+                lbl = a.get('label', '미지정')
+                grp = f" (그룹: {a['group_id']})" if a.get('group_id') else ""
+                final_t = a.get('final_text', a['text'])
+                
+                md_text += f"### Page {a['page_idx'] + 1}\n"
+                md_text += f"- **라벨:** `{lbl}`{grp}\n"
+                md_text += f"- **좌표:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                md_text += "#### 📝 추출 데이터\n"
+                md_text += f"```text\n{str(final_t)}\n```\n"
+                md_text += "---\n\n"
+            
+            c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
+            
+            export_data = {
+                "document_meta": {"file_name": st.session_state.file_name, "document_type": st.session_state.doc_type},
+                "annotations": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "group_id": a.get('group_id', ''), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
+            }
+            c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="result.json", mime="application/json")
+
+# ==========================================
+# 6. 숨김 버튼 및 JavaScript (단축키 등)
+# ==========================================
+st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
+
+for i, lbl in enumerate(st.session_state.labels[:9]): st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
+st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
+
+safe_active_rect = globals().get('active_rect_js', 'null')
+safe_tag_mode = globals().get('tag_mode', 'rect')
+
+raw_js = f"""
+window._current_active_rect = {safe_active_rect};
+window._current_tag_mode = "{safe_tag_mode}";
+if (!window._custom_js_injected) {{
+    window.insertDiffText = function(el) {{
+        const textToInsert = el.innerText;
+        let targetTA = window._lastActiveTA;
+        if (!targetTA) {{
+            const labels = window.document.querySelectorAll('label');
+            for (let lbl of labels) {{
+                if (lbl.innerText.includes("최종 교정 텍스트")) {{
+                    const container = lbl.closest('div[data-testid="stTextArea"]');
+                    if (container) {{ targetTA = container.querySelector('textarea'); break; }}
+                }}
+            }}
+        }}
+        if (targetTA) {{
+            const startPos = (window._lastTASelectionStart !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionStart : targetTA.value.length;
+            const endPos = (window._lastTASelectionEnd !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionEnd : targetTA.value.length;
+            const text = targetTA.value;
+            const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+            nativeInputValueSetter.call(targetTA, newText);
+            targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            targetTA.focus();
+            targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
+            window._lastTASelectionStart = targetTA.selectionStart;
+            window._lastTASelectionEnd = targetTA.selectionEnd;
+            window._lastActiveTA = targetTA;
+            const originalBg = el.style.backgroundColor;
+            el.style.backgroundColor = '#fff000';
+            setTimeout(() => {{ el.style.backgroundColor = originalBg; }}, 150);
+        }}
+    }};
+    window.document.addEventListener('keydown', function(e) {{
+        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+        if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
+            if(e.ctrlKey) e.preventDefault();
+            const btn = Array.from(window.document.querySelectorAll('button')).find(el => el.innerText === 'HL_' + (parseInt(e.key)-1));
+            if (btn) btn.click();
+        }}
+    }});
+    window._custom_js_injected = true;
+}}
+"""
+st.markdown(f'<div style="display:none; height:0; width:0; overflow:hidden;"><img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'))" /></div>', unsafe_allow_html=True)
