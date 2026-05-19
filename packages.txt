@@ -1,3 +1,5 @@
+libjpeg-dev
+zlib1g-dev
 tesseract-ocr
 tesseract-ocr-kor
-tesseract-ocr-chi-tra
+tesseract-ocr-eng
