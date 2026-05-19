@@ -45,8 +45,8 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0, 'ocr_lang': 'kor+eng', 'doc_type': '단행본',
-    'exclude_keywords': '저자소개',
-    'grouping_mode': False, 'active_group_id': 'G1' # 그룹 관리 상태 추가
+    'exclude_keywords': '저자소개', # UI는 제거하되, 백엔드 필터링 기능 유지를 위해 상태값 보존
+    'grouping_mode': False, 'active_group_id': 'G1'
 }
 
 for key, default in state_keys.items():
@@ -170,10 +170,6 @@ st.sidebar.markdown("### 📚 문서 메타데이터 설정")
 doc_types = ['논문메타', '논문전문', '단행본', '기타']
 st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=doc_types, index=doc_types.index(st.session_state.doc_type) if st.session_state.doc_type in doc_types else 0)
 
-st.sidebar.markdown("### 🧹 자동 텍스트 필터")
-filter_input = st.sidebar.text_input("제외할 문구 (쉼표로 구분)", value=st.session_state.exclude_keywords)
-st.session_state.exclude_keywords = filter_input
-
 st.sidebar.markdown("---")
 uploaded_file = st.sidebar.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
 
@@ -263,14 +259,10 @@ if st.session_state.file_bytes:
 
     st.write("### PDF 상호작용 구축 도구")
 
-    # ==========================================
-    # [신규 추가] 온라인 도움말 영역
-    # ==========================================
     with st.expander("💡 온라인 도움말 및 메타데이터 구축 가이드 (클릭하여 펼치기)", expanded=False):
         st.markdown("""
         #### 📌 기본 작업 지침
         * **자료유형 분류:** 표준/지침, 도서류 문서를 작업하실 때는 좌측 사이드바에서 자료유형을 반드시 **'단행본'**으로 설정해 주세요. 신문이나 연보는 **'기타'**로 분류합니다.
-        * **자동 필터링:** 좌측 사이드바의 '제외할 문구'에 `저자소개` 등을 입력해두면, 텍스트 추출 시 불필요한 부분이 자동으로 제외됩니다.
 
         #### 🖱️ 조작 및 단축키 안내
         * **영역 지정:** 메인 뷰어에서 마우스로 드래그하여 참고문헌, 초록 등의 추출 영역을 지정하세요. 오토피팅(Auto-fitting)이 켜져 있으면 텍스트 영역에 맞게 박스가 자동 보정됩니다.
@@ -282,7 +274,6 @@ if st.session_state.file_bytes:
         * **Diff 교정 뷰어:** 기본 추출(PyMuPDF)과 이미지 인식(OCR) 결과의 차이가 하이라이트 되어 표시됩니다. 색상 칠해진 텍스트를 클릭하면 '최종 교정 텍스트' 창의 마우스 커서 위치에 해당 텍스트가 쏙 들어갑니다.
         * **자동 스캔 (Quick-Find):** 좌측 사이드바에서 `참고문헌` 같은 특정 단어를 검색하면, 문서 전체를 훑어 자동으로 좌표를 따고 데이터를 추출합니다.
         """)
-    # ==========================================
 
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기", value=True)
     st.markdown("---")
@@ -300,9 +291,6 @@ if st.session_state.file_bytes:
             ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True)
             ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
-            # ==========================================
-            # 그룹핑 전용 컨트롤 패널 배치
-            # ==========================================
             btn_mode_cols = st.columns([1, 1, 1.5, 1.3])
             
             with btn_mode_cols[0]:
@@ -317,7 +305,7 @@ if st.session_state.file_bytes:
                 new_g_mode = st.toggle(f"🔗 그룹 묶기 모드 ({st.session_state.active_group_id})", value=st.session_state.grouping_mode)
                 if new_g_mode != st.session_state.grouping_mode:
                     st.session_state.grouping_mode = new_g_mode
-                    st.session_state.selected_box_id = None # 그룹 모드 전환 시 선택 해제
+                    st.session_state.selected_box_id = None
                     st.session_state.redraw_trigger += 1
                     st.rerun()
                     
@@ -328,7 +316,6 @@ if st.session_state.file_bytes:
                         st.session_state.active_group_id = next_id
                         st.rerun()
 
-            # [그룹 시각적 하이라이팅 적용]
             if (
                 "current_drawing" not in st.session_state or 
                 st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
@@ -344,7 +331,6 @@ if st.session_state.file_bytes:
                         
                         if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
                         
-                        # 시각적 구분: 현재 묶는 타겟 그룹은 '초록색', 다른 묶인 그룹은 '오렌지색'
                         is_target_group = st.session_state.grouping_mode and anno.get('group_id') == st.session_state.active_group_id
                         has_group = bool(anno.get('group_id'))
                         
@@ -375,13 +361,11 @@ if st.session_state.file_bytes:
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.last_redraw_trigger}",
             )
 
-            # 모드 전환
             if mode_toggle_pressed:
                 st.session_state.selected_box_id = None
                 st.session_state.redraw_trigger += 1
                 st.rerun()
 
-            # 적용 버튼 로직
             if apply_resize_pressed:
                 sid = st.session_state.selected_box_id
                 target_obj = get_canvas_obj(
@@ -408,7 +392,6 @@ if st.session_state.file_bytes:
                     st.session_state.redraw_trigger += 1
                     st.rerun()
 
-            # Drag 모드 상호작용 (선택, 그리기, 그룹 지정)
             if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
                 if canvas_result and canvas_result.json_data:
                     objs = [obj for obj in canvas_result.json_data.get("objects", []) if obj["type"] == "rect"]
@@ -423,7 +406,6 @@ if st.session_state.file_bytes:
                             p_x0, p_y0 = new_obj["left"] / pdf_to_canvas_ratio, new_obj["top"] / pdf_to_canvas_ratio
                             p_x1, p_y1 = p_x0 + (w / pdf_to_canvas_ratio), p_y0 + (h / pdf_to_canvas_ratio)
                             
-                            # [그룹핑 핵심 로직] 마우스 클릭(작은 박스 생성) 시
                             if w < 10 and h < 10:
                                 cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
                                 clicked_id = None
@@ -435,22 +417,19 @@ if st.session_state.file_bytes:
                                             break
                                 if clicked_id:
                                     if st.session_state.grouping_mode:
-                                        # 자석 모드 켜짐 -> 해당 박스에 타겟 그룹 부여/해제 반복
                                         for a in st.session_state.annotations:
                                             if a['id'] == clicked_id:
                                                 if a.get('group_id') == st.session_state.active_group_id:
-                                                    a['group_id'] = "" # 토글 해제
+                                                    a['group_id'] = ""
                                                 else:
-                                                    a['group_id'] = st.session_state.active_group_id # 부여
+                                                    a['group_id'] = st.session_state.active_group_id
                                                 break
                                     else:
-                                        # 자석 모드 꺼짐 -> 단일 선택
                                         st.session_state.selected_box_id = clicked_id
                                         
                                     st.session_state.redraw_trigger += 1
                                     st.rerun()
                                     
-                            # 드래그하여 박스 생성 (추출 로직은 동일)
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
                                 fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
@@ -471,7 +450,6 @@ if st.session_state.file_bytes:
                                 basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
                                 ocr_text = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
                                 
-                                # 그룹핑 모드가 켜져있는 상태에서 새로 그리면, 곧바로 그 그룹 번호를 할당해 줌
                                 initial_group = st.session_state.active_group_id if st.session_state.grouping_mode else ""
                                 
                                 st.session_state.annotations.append({
@@ -529,13 +507,7 @@ if st.session_state.file_bytes:
             curr_anno = None
 
     with col_edit:
-        # 디버그 창은 닫아둡니다
-        with st.expander("🐞 디버그 상태창 (클릭하여 열기)", expanded=False):
-            st.write(f"**1. 선택된 박스 ID:** `{st.session_state.selected_box_id}`")
-            if curr_anno:
-                old_r = curr_anno['pdf_rect']
-                st.write(f"**3. 저장된 기존 좌표:** `[{old_r[0]:.1f}, {old_r[1]:.1f}, {old_r[2]:.1f}, {old_r[3]:.1f}]`")
-
+        # 디버그 창 UI 제거됨
         if curr_anno:
             lbl_col, grp_col = st.columns([6, 4])
             with lbl_col:
@@ -582,7 +554,7 @@ if st.session_state.file_bytes:
                                 'ocr_text': "", 
                                 'final_text': basic_text,
                                 'img_name': img_name, 'img_path': img_path, 'label': curr_lbl,
-                                'group_id': curr_group # 일괄 복사 시 그룹 ID도 같이 복사
+                                'group_id': curr_group
                             })
                             copy_count += 1
                             
