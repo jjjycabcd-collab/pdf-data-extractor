@@ -160,12 +160,10 @@ def clean_text(text):
     if not text: return ""
     lines = text.split('\n')
     cleaned_lines = []
-    # 동적 필터링 키워드 로드
     excludes = [k.strip() for k in st.session_state.exclude_keywords.split(',') if k.strip()]
     
     for line in lines:
         line = line.strip()
-        # 제외 키워드가 포함되지 않은 라인만 추가
         if line and not any(ex in line for ex in excludes):
             line = re.sub(r'\s+', ' ', line)
             cleaned_lines.append(line)
@@ -212,12 +210,10 @@ def parse_page_ranges(range_str, max_pages):
 # ==========================================
 # 3. 사이드바 (메타데이터, 빠른 탐색, 필터, 파일)
 # ==========================================
-# [기능 1] 문서 전체 메타데이터 분류
 st.sidebar.markdown("### 📚 문서 메타데이터 설정")
 doc_types = ['논문메타', '논문전문', '단행본', '기타']
 st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=doc_types, index=doc_types.index(st.session_state.doc_type) if st.session_state.doc_type in doc_types else 0)
 
-# [기능 4] 텍스트 동적 후처리 필터
 st.sidebar.markdown("### 🧹 자동 텍스트 필터")
 filter_input = st.sidebar.text_input("제외할 문구 (쉼표로 구분)", value=st.session_state.exclude_keywords, help="여기에 입력된 단어가 포함된 줄은 추출 결과에서 자동 삭제됩니다.")
 st.session_state.exclude_keywords = filter_input
@@ -251,7 +247,6 @@ if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
 
-    # [기능 2] 핵심 섹션 자동 탐색 (Quick-Find)
     with st.sidebar.expander("⚡ 단어 기반 자동 탐색 (Quick-Find)", expanded=False):
         qf_keyword = st.text_input("찾을 키워드 (예: 참고문헌)")
         qf_label = st.selectbox("할당할 라벨", options=st.session_state.labels)
@@ -261,7 +256,20 @@ if st.session_state.file_bytes:
                 for p_idx in range(total_pages):
                     page = doc.load_page(p_idx)
                     text_instances = page.search_for(qf_keyword)
+                    
+                    # [핵심 수정] PDF 볼드체 오버프린팅 현상 방지를 위한 중복 좌표 필터링
+                    unique_instances = []
                     for inst in text_instances:
+                        is_dup = False
+                        for u in unique_instances:
+                            # x, y 좌표가 5픽셀 이내로 차이나면 같은 위치에 덧칠된 텍스트로 간주하고 무시
+                            if abs(inst.x0 - u.x0) < 5 and abs(inst.y0 - u.y0) < 5:
+                                is_dup = True
+                                break
+                        if not is_dup:
+                            unique_instances.append(inst)
+
+                    for inst in unique_instances:
                         pad = 5
                         fit_rect = fitz.Rect(max(0, inst.x0 - pad), max(0, inst.y0 - pad), min(page.rect.width, inst.x1 + pad), min(page.rect.height, inst.y1 + pad))
                         
@@ -278,8 +286,13 @@ if st.session_state.file_bytes:
                             'img_name': img_name, 'img_path': img_path, 'label': qf_label
                         })
                         scan_count += 1
-                st.success(f"총 {scan_count}개의 '{qf_keyword}' 영역이 자동으로 추출되었습니다.")
-                if scan_count > 0: st.rerun()
+                
+                if scan_count > 0:
+                    st.session_state.redraw_trigger += 1 # 캔버스 화면 갱신 트리거
+                    st.success(f"총 {scan_count}개의 '{qf_keyword}' 영역이 자동으로 추출되었습니다.")
+                    st.rerun()
+                else:
+                    st.warning("일치하는 단어를 찾을 수 없습니다.")
 
     st.sidebar.markdown("---")
     try: active_idx = st.session_state.labels.index(st.session_state.active_label)
@@ -550,7 +563,6 @@ if st.session_state.file_bytes:
             lbl_idx = st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=lbl_idx, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
-            # [기능 3] 반복 영역 일괄 지정 (Bulk Tagging)
             with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
                 copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8, 10)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력")
                 if st.button("📋 현재 좌표 일괄 복사 및 추출 실행"):
@@ -560,10 +572,10 @@ if st.session_state.file_bytes:
                         orig_rect = curr_anno['pdf_rect']
                         for p_num in target_pages:
                             p_idx = p_num - 1
-                            if p_idx == curr_anno['page_idx']: continue # 자기 자신은 제외
+                            if p_idx == curr_anno['page_idx']: continue
                             
                             page = doc.load_page(p_idx)
-                            fit_rect = fitz.Rect(orig_rect) # 동일한 좌표 사용
+                            fit_rect = fitz.Rect(orig_rect)
                             
                             st.session_state.crop_counter += 1
                             img_name = f"crop_{st.session_state.crop_counter:03d}.png"
@@ -583,8 +595,11 @@ if st.session_state.file_bytes:
                                 'img_name': img_name, 'img_path': img_path, 'label': curr_lbl
                             })
                             copy_count += 1
-                        st.success(f"{copy_count}개 페이지에 영역 복사가 완료되었습니다!")
-                        st.rerun()
+                        
+                        if copy_count > 0:
+                            st.session_state.redraw_trigger += 1 # 캔버스 화면 갱신 트리거
+                            st.success(f"{copy_count}개 페이지에 영역 복사가 완료되었습니다!")
+                            st.rerun()
 
             st.markdown("##### 🔍 텍스트 추출 결과 비교")
             col_b, col_o = st.columns(2)
@@ -613,7 +628,6 @@ if st.session_state.file_bytes:
             c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
             if c2.button("💾 저장"): st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
             
-            # --- 수정된 부분 (여러 줄로 분리) ---
             md_text = f"# 문서 추출 데이터 ({st.session_state.doc_type})\n\n"
             for a in st.session_state.annotations:
                 r = a['pdf_rect']
@@ -626,7 +640,6 @@ if st.session_state.file_bytes:
                 md_text += "#### 📝 추출 데이터\n"
                 md_text += f"```text\n{str(final_t)}\n```\n"
                 md_text += "---\n\n"
-            # ------------------------------------
             
             c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
             
