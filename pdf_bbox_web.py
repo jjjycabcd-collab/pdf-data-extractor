@@ -21,7 +21,6 @@ st.set_page_config(layout="wide", page_title="상호작용 데이터 구축 - We
 active_rect_js = "null"
 tag_mode = "rect"
 
-# [변경점] Streamlit의 'Running...' 인디케이터를 완전히 숨겨 화면 껌뻑임을 줄임
 st.markdown(
     """
     <style>
@@ -59,8 +58,6 @@ os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 # ==========================================
 # 2. 캐싱 및 유틸리티 함수
 # ==========================================
-# [핵심 변경점] cache_data -> cache_resource 로 변경. 
-# 매번 복사본을 만들지 않고 동일한 이미지 객체를 반환하여 캔버스 플래시(깜빡임) 방지!
 @st.cache_resource(show_spinner=False)
 def get_cached_display_img(file_bytes, page_idx, canvas_w):
     full_bg, pdf_w, pdf_h = get_page_image(file_bytes, page_idx)
@@ -96,6 +93,12 @@ def update_label(aid):
     for a in st.session_state.annotations:
         if a['id'] == aid:
             a['label'] = st.session_state[f"lbl_sel_{aid}"]
+            break
+
+def update_group_id(aid):
+    for a in st.session_state.annotations:
+        if a['id'] == aid:
+            a['group_id'] = st.session_state[f"group_sel_{aid}"]
             break
 
 def set_active_label(lbl): st.session_state.active_label = lbl
@@ -214,7 +217,7 @@ if st.session_state.file_bytes:
                             'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_idx,
                             'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                             'text': basic_text, 'ocr_text': "", 'final_text': basic_text,
-                            'img_name': img_name, 'img_path': img_path, 'label': qf_label
+                            'img_name': img_name, 'img_path': img_path, 'label': qf_label, 'group_id': "" # 그룹 ID 속성 추가
                         })
                         scan_count += 1
                 
@@ -303,7 +306,6 @@ if st.session_state.file_bytes:
                 initial_drawing=st.session_state.current_drawing, 
                 update_streamlit=True,
                 height=canvas_h, width=canvas_w, drawing_mode=tag_mode, display_toolbar=False,
-                # Key에 last_redraw_trigger만 의존시켜 드래그 시 캔버스가 죽는(Remount) 현상 방지
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.last_redraw_trigger}",
             )
 
@@ -396,7 +398,8 @@ if st.session_state.file_bytes:
                                     'id': f"id_{st.session_state.crop_counter}", 'page_idx': st.session_state.current_page,
                                     'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                     'text': basic_text, 'ocr_text': ocr_text, 'final_text': basic_text,
-                                    'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label
+                                    'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label,
+                                    'group_id': "" # 생성 시 빈 문자열로 그룹 초기화
                                 })
                                 st.session_state.selected_box_id = None
                                 st.session_state.redraw_trigger += 1
@@ -414,7 +417,9 @@ if st.session_state.file_bytes:
             def format_label(aid):
                 if aid == "NEW_MODE": return "✨ [신규 추출 대기 중]"
                 a = anno_dict[aid]
-                return f"[P{a['page_idx']+1}] [{a.get('label', '미지정')}] | {a.get('final_text', a['text'])[:15].replace(chr(10), ' ')}..."
+                # [UI 반영] 그룹 ID가 있으면 목록에 표시
+                group_tag = f" 🔗[{a['group_id']}]" if a.get('group_id') else ""
+                return f"[P{a['page_idx']+1}] [{a.get('label', '미지정')}]{group_tag} | {a.get('final_text', a['text'])[:15].replace(chr(10), ' ')}..."
 
             current_val = st.session_state.selected_box_id if st.session_state.selected_box_id in anno_dict else "NEW_MODE"
             selected_id = st.radio("목록", options=radio_options, format_func=format_label, index=radio_options.index(current_val), label_visibility="collapsed")
@@ -448,36 +453,42 @@ if st.session_state.file_bytes:
         # ==========================================
         # 🐞 디버그 상태창
         # ==========================================
-        st.markdown("### 🐞 디버그 상태창")
-        st.write(f"**1. 선택된 박스 ID:** `{st.session_state.selected_box_id}`")
-        
-        current_canvas_obj = get_canvas_obj(
-            canvas_result.json_data if canvas_result else None, 
-            st.session_state.selected_box_id, 
-            st.session_state.annotations, 
-            st.session_state.current_page
-        )
-        
-        if current_canvas_obj:
-            n_x0 = current_canvas_obj['left'] / pdf_to_canvas_ratio
-            n_y0 = current_canvas_obj['top'] / pdf_to_canvas_ratio
-            n_x1 = n_x0 + (current_canvas_obj['width'] * current_canvas_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-            n_y1 = n_y0 + (current_canvas_obj['height'] * current_canvas_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-            st.write(f"**2. 캔버스 위 실시간 좌표:** `[{n_x0:.1f}, {n_y0:.1f}, {n_x1:.1f}, {n_y1:.1f}]` ✅")
-        else:
-            st.write("**2. 캔버스 위 실시간 좌표:** `(객체 정보 없음)` ❌")
+        with st.expander("🐞 디버그 상태창 (클릭하여 열기)", expanded=False):
+            st.write(f"**1. 선택된 박스 ID:** `{st.session_state.selected_box_id}`")
             
-        if curr_anno:
-            old_r = curr_anno['pdf_rect']
-            st.write(f"**3. 저장된 기존 좌표:** `[{old_r[0]:.1f}, {old_r[1]:.1f}, {old_r[2]:.1f}, {old_r[3]:.1f}]`")
-        else:
-            st.write("**3. 저장된 기존 좌표:** `(선택된 박스 없음)`")
-        st.markdown("---")
+            current_canvas_obj = get_canvas_obj(
+                canvas_result.json_data if canvas_result else None, 
+                st.session_state.selected_box_id, 
+                st.session_state.annotations, 
+                st.session_state.current_page
+            )
+            
+            if current_canvas_obj:
+                n_x0 = current_canvas_obj['left'] / pdf_to_canvas_ratio
+                n_y0 = current_canvas_obj['top'] / pdf_to_canvas_ratio
+                n_x1 = n_x0 + (current_canvas_obj['width'] * current_canvas_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                n_y1 = n_y0 + (current_canvas_obj['height'] * current_canvas_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                st.write(f"**2. 캔버스 위 실시간 좌표:** `[{n_x0:.1f}, {n_y0:.1f}, {n_x1:.1f}, {n_y1:.1f}]` ✅")
+            else:
+                st.write("**2. 캔버스 위 실시간 좌표:** `(객체 정보 없음)` ❌")
+                
+            if curr_anno:
+                old_r = curr_anno['pdf_rect']
+                st.write(f"**3. 저장된 기존 좌표:** `[{old_r[0]:.1f}, {old_r[1]:.1f}, {old_r[2]:.1f}, {old_r[3]:.1f}]`")
+            else:
+                st.write("**3. 저장된 기존 좌표:** `(선택된 박스 없음)`")
         # ==========================================
 
         if curr_anno:
-            curr_lbl = curr_anno.get('label', '미지정')
-            st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
+            lbl_col, grp_col = st.columns([6, 4])
+            with lbl_col:
+                curr_lbl = curr_anno.get('label', '미지정')
+                st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
+            
+            with grp_col:
+                # [그룹핑 UI 추가] 그룹 ID 텍스트 입력
+                curr_group = curr_anno.get('group_id', "")
+                st.text_input("🔗 그룹 ID 지정", value=curr_group, placeholder="예: G1", key=f"group_sel_{curr_anno['id']}", on_change=update_group_id, args=(curr_anno['id'],))
 
             with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
                 copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력", key=f"bulk_txt_{curr_anno['id']}")
@@ -514,7 +525,8 @@ if st.session_state.file_bytes:
                                 'text': basic_text, 
                                 'ocr_text': "", 
                                 'final_text': basic_text,
-                                'img_name': img_name, 'img_path': img_path, 'label': curr_lbl
+                                'img_name': img_name, 'img_path': img_path, 'label': curr_lbl,
+                                'group_id': curr_group # 일괄 복사 시 그룹 ID도 같이 복사
                             })
                             copy_count += 1
                             
@@ -550,10 +562,11 @@ if st.session_state.file_bytes:
             for a in st.session_state.annotations:
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
+                grp = f" (그룹: {a['group_id']})" if a.get('group_id') else ""
                 final_t = a.get('final_text', a['text'])
                 
                 md_text += f"### Page {a['page_idx'] + 1}\n"
-                md_text += f"- **라벨:** `{lbl}`\n"
+                md_text += f"- **라벨:** `{lbl}`{grp}\n"
                 md_text += f"- **좌표:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
                 md_text += "#### 📝 추출 데이터\n"
                 md_text += f"```text\n{str(final_t)}\n```\n"
@@ -563,14 +576,13 @@ if st.session_state.file_bytes:
             
             export_data = {
                 "document_meta": {"file_name": st.session_state.file_name, "document_type": st.session_state.doc_type},
-                "annotations": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
+                "annotations": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "group_id": a.get('group_id', ''), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
             }
             c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="result.json", mime="application/json")
 
 # ==========================================
 # 6. 숨김 버튼 및 JavaScript (단축키 등)
 # ==========================================
-# [변경점] DOM Reflow를 유발하는 <img> 태그 대신, 안전하고 투명한 <div> 래퍼를 사용하여 화면 번쩍임 추가 방지
 st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
 st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
 
@@ -626,5 +638,4 @@ if (!window._custom_js_injected) {{
     window._custom_js_injected = true;
 }}
 """
-# 보이지 않는 래퍼를 사용해 DOM 충돌 완화
 st.markdown(f'<div style="display:none; height:0; width:0; overflow:hidden;"><img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'))" /></div>', unsafe_allow_html=True)
