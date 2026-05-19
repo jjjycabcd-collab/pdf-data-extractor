@@ -57,7 +57,6 @@ os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 # ==========================================
 # 2. 캐싱 및 유틸리티 함수 (속도 최적화 핵심)
 # ==========================================
-# [최적화 1] 무거운 캔버스 이미지 변환을 메모리에 캐싱하여 화면 깜빡임/버벅임 완벽 제거
 @st.cache_data(show_spinner=False)
 def get_cached_display_img(file_bytes, page_idx, canvas_w):
     full_bg, pdf_w, pdf_h = get_page_image(file_bytes, page_idx)
@@ -197,7 +196,7 @@ if st.session_state.file_bytes:
     text_area_height = st.sidebar.slider("↕️ 교정창 세로 길이 (px)", min_value=150, max_value=1000, value=250, step=50)
 
     # ==========================================
-    # 4. 메인 뷰어 캔버스 (최적화 렌더링)
+    # 4. 메인 뷰어 캔버스
     # ==========================================
     canvas_w = 700
     display_img, canvas_h, pdf_to_canvas_ratio = get_cached_display_img(st.session_state.file_bytes, st.session_state.current_page, canvas_w)
@@ -291,7 +290,6 @@ if st.session_state.file_bytes:
                                         
                     if mode_toggle_pressed or modified:
                         if mode_toggle_pressed: st.session_state.selected_box_id = None
-                        if modified: st.session_state.redraw_trigger += 1 
                         st.rerun()
 
                 else:
@@ -320,7 +318,6 @@ if st.session_state.file_bytes:
                                             break
                                 if clicked_id:
                                     st.session_state.selected_box_id = clicked_id
-                                    st.session_state.redraw_trigger += 1
                                     st.rerun()
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
@@ -348,7 +345,6 @@ if st.session_state.file_bytes:
                                     'img_path': img_path, 'label': st.session_state.active_label
                                 })
                                 st.session_state.selected_box_id = None
-                                st.session_state.redraw_trigger += 1 
                                 st.rerun()
 
     # ==========================================
@@ -373,7 +369,6 @@ if st.session_state.file_bytes:
                 if selected_id != "NEW_MODE": st.session_state.current_page = anno_dict[selected_id]['page_idx']
                 st.rerun()
                 
-            # [최적화 2] 전체 재인식 버튼 추가 (일괄 처리)
             st.markdown("---")
             if st.button("🔄 현재 페이지 일괄 재인식 (OCR)", use_container_width=True, help="현재 설정된 언어와 필터로 이 페이지의 모든 박스를 다시 인식합니다."):
                 updated_count = 0
@@ -450,7 +445,6 @@ if st.session_state.file_bytes:
             with col_o:
                 st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
                 st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
-                # 단일 항목 재인식
                 if st.button("🔄 선택 항목 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
                     curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
                     st.rerun()
