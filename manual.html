@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 상호작용 어노테이션 도구 명세서</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        warm: {
+                            50: '#fafaf9',
+                            100: '#f5f5f4',
+                            200: '#e7e5e4',
+                            300: '#d6d3d1',
+                            800: '#292524',
+                            900: '#1c1917',
+                        },
+                        accent: {
+                            light: '#14b8a6',
+                            DEFAULT: '#0d9488',
+                            dark: '#0f766e',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        
+        body {
+            font-family: 'Pretendard', sans-serif;
+            background-color: #fafaf9;
+            color: #292524;
+            overflow-x: hidden;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 40vh;
+            max-height: 400px;
+        }
+
+        .nav-btn.active {
+            border-bottom: 2px solid #0d9488;
+            color: #0d9488;
+            font-weight: 600;
+        }
+
+        .step-btn.active {
+            background-color: #0d9488;
+            color: white;
+            border-color: #0d9488;
+        }
+
+        .tech-card.active {
+            border-color: #0d9488;
+            background-color: #f0fdfa;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out forwards;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hide-scroll::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scroll {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-accent selection:text-white flex flex-col min-h-screen">
+
+    <!-- Chosen Palette: Warm Neutrals (Stone) with Teal (Accent) -->
+    <!-- Application Structure Plan: The SPA is structured into a top navigation bar and three main interactive views (Workflow, Tech Stack, Limitations) instead of a long scrolling document. This dashboard-like approach allows users to focus on one aspect of the system at a time. The Workflow uses an interactive stepper to explain the process sequentially. The Tech Stack section uses a grid of selectable cards that dynamically update a Radar chart to visualize conceptual performance metrics of each technology, fulfilling the interactive visualization requirement while making the technical specs engaging. Limitations are presented as flip/expand cards for clean organization. -->
+    <!-- Visualization & Content Choices: 
+         1. Workflow -> Interactive Stepper -> Guides user sequentially through the process without overwhelming text.
+         2. Tech Stack -> Selectable Cards + Radar Chart (Chart.js) -> Compares relative conceptual metrics (Speed, Accuracy, Automation, Resource) to show WHY each tech was chosen.
+         3. Limitations -> Accordion/Toggle List -> Keeps the UI clean and focuses on one problem/solution at a time.
+         Method: Vanilla JS + Tailwind + Chart.js. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <header class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center gap-2">
+                    <span class="text-2xl">📄</span>
+                    <h1 class="text-xl font-bold text-warm-900 tracking-tight">PDF Meta-Extractor</h1>
+                </div>
+                <nav class="hidden sm:flex space-x-8 h-full">
+                    <button class="nav-btn active h-full px-1 flex items-center transition-colors" data-target="view-workflow">처리 절차</button>
+                    <button class="nav-btn h-full px-1 flex items-center transition-colors" data-target="view-tech">사용 기술</button>
+                    <button class="nav-btn h-full px-1 flex items-center transition-colors" data-target="view-limitations">한계점 및 개선</button>
+                </nav>
+                <div class="sm:hidden flex items-center">
+                    <select id="mobile-nav" class="bg-warm-100 border-none rounded-md py-1 px-2 text-sm font-medium text-warm-800 focus:ring-2 focus:ring-accent">
+                        <option value="view-workflow">처리 절차</option>
+                        <option value="view-tech">사용 기술</option>
+                        <option value="view-limitations">한계점 및 개선</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        <div class="mb-8 text-center max-w-3xl mx-auto">
+            <h2 class="text-3xl font-extrabold text-warm-900 mb-4">PDF 메타데이터 추출 및 상호작용 어노테이션 에디터</h2>
+            <p class="text-lg text-warm-800">
+                본 시스템은 PDF 문서에서 핵심 메타데이터를 효율적으로 추출하고, 구조화된 학습/구축 데이터를 생성하기 위해 개발된 웹 기반 상호작용 도구입니다. 수작업을 최소화하고 데이터 정확도를 극대화합니다.
+            </p>
+        </div>
+
+        <section id="view-workflow" class="view-section block fade-in">
+            <div class="bg-white rounded-2xl shadow-sm border border-warm-200 p-6 md:p-8">
+                <div class="mb-6">
+                    <h3 class="text-2xl font-bold text-warm-900 flex items-center gap-2">
+                        <span>⚙️</span> 프로그램 처리 절차
+                    </h3>
+                    <p class="text-warm-800 mt-2">파이프라인의 각 단계를 클릭하여 상세 동작 메커니즘을 확인하세요.</p>
+                </div>
+
+                <div class="flex flex-col md:flex-row gap-8">
+                    <div class="w-full md:w-1/3 flex flex-row md:flex-col gap-3 overflow-x-auto hide-scroll pb-4 md:pb-0">
+                        <button class="step-btn active text-left px-4 py-3 rounded-xl border border-warm-200 font-medium transition-all whitespace-nowrap md:whitespace-normal" data-step="1">
+                            1. 문서 업로드 및 분류
+                        </button>
+                        <button class="step-btn text-left px-4 py-3 rounded-xl border border-warm-200 font-medium transition-all whitespace-nowrap md:whitespace-normal" data-step="2">
+                            2. 영역 지정 및 스캔
+                        </button>
+                        <button class="step-btn text-left px-4 py-3 rounded-xl border border-warm-200 font-medium transition-all whitespace-nowrap md:whitespace-normal" data-step="3">
+                            3. 하이브리드 추출
+                        </button>
+                        <button class="step-btn text-left px-4 py-3 rounded-xl border border-warm-200 font-medium transition-all whitespace-nowrap md:whitespace-normal" data-step="4">
+                            4. 데이터 교정 및 그룹핑
+                        </button>
+                        <button class="step-btn text-left px-4 py-3 rounded-xl border border-warm-200 font-medium transition-all whitespace-nowrap md:whitespace-normal" data-step="5">
+                            5. 구조화 및 내보내기
+                        </button>
+                    </div>
+
+                    <div class="w-full md:w-2/3 bg-warm-50 rounded-xl p-6 border border-warm-200 relative min-h-[300px] flex flex-col justify-center">
+                        <div id="step-content" class="fade-in">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="view-tech" class="view-section hidden fade-in">
+            <div class="bg-white rounded-2xl shadow-sm border border-warm-200 p-6 md:p-8">
+                <div class="mb-6">
+                    <h3 class="text-2xl font-bold text-warm-900 flex items-center gap-2">
+                        <span>🛠️</span> 프로그램 사용 기술 및 모듈 분석
+                    </h3>
+                    <p class="text-warm-800 mt-2">각 기술 스택을 선택하여 해당 모듈의 역할과 시스템 내 핵심 성능 지표(개념도)를 확인하세요.</p>
+                </div>
+
+                <div class="flex flex-col lg:flex-row gap-8">
+                    <div class="w-full lg:w-1/2 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
+                        <div class="tech-card active cursor-pointer border border-warm-200 rounded-xl p-4 transition-all" data-tech="streamlit">
+                            <div class="font-bold text-lg text-warm-900 mb-1">Streamlit & Canvas</div>
+                            <div class="text-sm text-warm-800">프론트엔드 / UI 상호작용</div>
+                        </div>
+                        <div class="tech-card cursor-pointer border border-warm-200 rounded-xl p-4 transition-all" data-tech="pymupdf">
+                            <div class="font-bold text-lg text-warm-900 mb-1">PyMuPDF (fitz)</div>
+                            <div class="text-sm text-warm-800">네이티브 텍스트 추출 엔진</div>
+                        </div>
+                        <div class="tech-card cursor-pointer border border-warm-200 rounded-xl p-4 transition-all" data-tech="pytesseract">
+                            <div class="font-bold text-lg text-warm-900 mb-1">PyTesseract & PIL</div>
+                            <div class="text-sm text-warm-800">OCR 및 이미지 처리 엔진</div>
+                        </div>
+                        <div class="tech-card cursor-pointer border border-warm-200 rounded-xl p-4 transition-all" data-tech="javascript">
+                            <div class="font-bold text-lg text-warm-900 mb-1">JavaScript & difflib</div>
+                            <div class="text-sm text-warm-800">DOM 제어 및 텍스트 비교</div>
+                        </div>
+                    </div>
+
+                    <div class="w-full lg:w-1/2 flex flex-col">
+                        <div class="bg-warm-50 rounded-xl p-6 border border-warm-200 mb-4">
+                            <h4 id="tech-title" class="text-xl font-bold text-accent-dark mb-2">Streamlit & Canvas</h4>
+                            <p id="tech-desc" class="text-warm-800 text-sm leading-relaxed min-h-[60px]">
+                                파이썬 기반의 빠르고 직관적인 웹 UI 구현 및 상태 관리. PDF 렌더링 이미지 위에서 직접 Bbox를 그리는 핵심 뷰어 역할을 수행합니다.
+                            </p>
+                        </div>
+                        <div class="bg-white rounded-xl p-4 border border-warm-200 flex-grow flex items-center justify-center">
+                            <div class="chart-container">
+                                <canvas id="techChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="view-limitations" class="view-section hidden fade-in">
+            <div class="bg-white rounded-2xl shadow-sm border border-warm-200 p-6 md:p-8">
+                <div class="mb-6">
+                    <h3 class="text-2xl font-bold text-warm-900 flex items-center gap-2">
+                        <span>⚠️</span> 프로그램 한계점 및 개선 방안
+                    </h3>
+                    <p class="text-warm-800 mt-2">시스템 최적화 과정에서 발생한 아키텍처 한계와 이를 극복하기 위한 향후 대안입니다.</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    
+                    <div class="bg-warm-50 rounded-xl p-6 border border-warm-200 hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-xl">💾</div>
+                            <h4 class="text-lg font-bold text-warm-900">메모리 의존성 (OOM 리스크)</h4>
+                        </div>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">현상:</span> 업로드된 PDF 파일 전체를 서버 메모리(session_state)에 로드하여 처리합니다.</p>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">한계:</span> 500페이지 이상 대용량 파일 또는 다중 접속 시 Out Of Memory 에러 발생 가능성이 존재합니다.</p>
+                        <div class="mt-4 pt-4 border-t border-warm-200">
+                            <p class="text-sm text-accent-dark font-medium"><span class="mr-2">💡 개선대안:</span> 임시 폴더(tempfile) 저장 및 페이지 단위 스트리밍 로드 아키텍처 도입</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-warm-50 rounded-xl p-6 border border-warm-200 hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-xl">⚡</div>
+                            <h4 class="text-lg font-bold text-warm-900">OCR 처리 속도와 OS 의존성</h4>
+                        </div>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">현상:</span> Tesseract OCR 호출 시 별도의 프로세스가 실행됩니다.</p>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">한계:</span> Host OS에 Tesseract 바이너리 설치가 강제되며, 다중 Bbox 처리 시 속도 저하 및 스캔 품질에 따른 인식률 편차가 있습니다.</p>
+                        <div class="mt-4 pt-4 border-t border-warm-200">
+                            <p class="text-sm text-accent-dark font-medium"><span class="mr-2">💡 개선대안:</span> 비동기 큐잉 시스템 도입 또는 클라우드 기반 OCR API 병행 사용</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-warm-50 rounded-xl p-6 border border-warm-200 hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-xl">🎯</div>
+                            <h4 class="text-lg font-bold text-warm-900">오토피팅(Auto-fitting) 오작동</h4>
+                        </div>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">현상:</span> 텍스트 레이어 좌표를 참조하여 박스를 정밀하게 자동 조절합니다.</p>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">한계:</span> 텍스트 레이어가 물리적 이미지와 틀어진 불량 PDF나 복잡한 배경 이미지의 경우 엉뚱한 위치로 피팅될 수 있습니다.</p>
+                        <div class="mt-4 pt-4 border-t border-warm-200">
+                            <p class="text-sm text-accent-dark font-medium"><span class="mr-2">💡 개선대안:</span> 레이어 불일치 임계값 감지 로직 추가 및 오토피팅 수동 강제 오버라이드 기능</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-warm-50 rounded-xl p-6 border border-warm-200 hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center text-xl">🔄</div>
+                            <h4 class="text-lg font-bold text-warm-900">단방향 저장 구조 (영속성 부재)</h4>
+                        </div>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">현상:</span> 추출된 데이터는 브라우저 세션 유지 중에만 존재하며 최종 JSON 다운로드로 마무리됩니다.</p>
+                        <p class="text-sm text-warm-800 mb-3"><span class="font-bold">한계:</span> 새로고침이나 예기치 않은 종료 시 작업 내역이 모두 소실됩니다.</p>
+                        <div class="mt-4 pt-4 border-t border-warm-200">
+                            <p class="text-sm text-accent-dark font-medium"><span class="mr-2">💡 개선대안:</span> IndexedDB를 활용한 브라우저 로컬 중간 저장 또는 경량 DB 연동</p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="bg-warm-900 text-warm-300 py-6 text-center text-sm">
+        <p>PDF Meta-Extractor Architecture Documentation &copy; 2026</p>
+    </footer>
+
+    <script>
+        const workflowData = {
+            1: {
+                title: "1. 문서 업로드 및 초기 분류",
+                icon: "📤",
+                content: `
+                    <ul class="space-y-3 text-warm-800">
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> 사용자가 PDF 파일을 업로드하면 시스템 메모리에 바이트 형태로 로드하여 렌더링을 준비합니다.</li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> 사이드바를 통해 문서의 메타데이터(자료유형)를 설정합니다. <br><span class="text-sm text-warm-500 ml-4">(지침: 표준/지침 및 도서류는 '단행본', 보도자료/신문/연보 등은 '기타'로 분류)</span></li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> 텍스트 추출 시 자동으로 배제할 필터 키워드(예: '저자소개')를 설정하여 정제(Cleaning) 과정을 자동화합니다.</li>
+                    </ul>`
+            },
+            2: {
+                title: "2. 영역 지정 및 자동 스캔",
+                icon: "🔍",
+                content: `
+                    <ul class="space-y-3 text-warm-800">
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>수동 지정:</b> 캔버스 UI를 통해 추출 영역(Bounding Box)을 드래그합니다. '오토피팅' 모드가 작동하여 대략적으로 그린 박스를 실제 텍스트 좌표에 맞춰 정밀 보정합니다.</li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>자동 스캔 (Quick-Find):</b> '참고문헌' 등 특정 키워드 입력 시 문서 전체를 스캔하여 해당 키워드가 포함된 좌표를 자동 박싱하고 일괄 추출합니다.</li>
+                    </ul>`
+            },
+            3: {
+                title: "3. 하이브리드 텍스트 추출",
+                icon: "⚙️",
+                content: `
+                    <p class="mb-3 text-warm-800">지정된 좌표를 바탕으로 두 가지 추출 방식이 <b>동시에 진행</b>됩니다.</p>
+                    <ul class="space-y-3 text-warm-800">
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>기본 추출 (PyMuPDF):</b> PDF 내부에 포함된 텍스트 레이어를 읽어 들여 빠르고 정확하게 텍스트를 추출합니다.</li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>이미지 인식 (OCR):</b> 지정 영역을 고해상도 이미지로 크롭 후 Tesseract 엔진으로 변환합니다. (스캔본/손상 문서 대비)</li>
+                    </ul>`
+            },
+            4: {
+                title: "4. 데이터 교정 및 그룹핑",
+                icon: "📝",
+                content: `
+                    <ul class="space-y-3 text-warm-800">
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>Diff 시각화 교정:</b> 기본 추출 텍스트와 OCR 텍스트 간 차이점을 HTML Diff로 시각화합니다. 색칠된 텍스트 클릭 시 최종 교정 창 커서 위치에 바로 삽입됩니다.</li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>단락 그룹핑:</b> 다단(2단, 3단) 논문이나 페이지를 넘나드는 문단 처리를 위해 '그룹 묶기(G1, G2 등)' 기능으로 논리적 연관 데이터를 병합합니다.</li>
+                    </ul>`
+            },
+            5: {
+                title: "5. 데이터 구조화 및 내보내기",
+                icon: "📊",
+                content: `
+                    <ul class="space-y-3 text-warm-800">
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>취합:</b> 최종 교정된 텍스트, 좌표(Bbox), 라벨링 정보, 그룹 ID 등을 구조적으로 취합합니다.</li>
+                        <li class="flex items-start"><span class="text-accent mr-2 mt-0.5">■</span> <b>Export:</b> 취합된 데이터를 바탕으로 Markdown 형식 보고서나 기계학습 파이프라인에 바로 활용 가능한 JSON 스키마 파일로 즉시 다운로드합니다.</li>
+                    </ul>`
+            }
+        };
+
+        const techData = {
+            'streamlit': {
+                title: "Streamlit & Canvas",
+                desc: "파이썬 기반의 직관적인 웹 UI 구현 및 상태(`session_state`) 관리. `streamlit-drawable-canvas`를 통해 PDF 이미지 위에서 사용자가 직접 Bbox를 그리는 핵심 프론트엔드 역할을 수행합니다.",
+                metrics: [90, 40, 85, 95, 60] 
+            },
+            'pymupdf': {
+                title: "PyMuPDF (fitz)",
+                desc: "PDF 페이지 로드, 고해상도 이미지 변환, 좌표 기반 Native 텍스트 추출 및 정밀 단어 좌표 탐색을 담당하는 초고속 PDF 제어 엔진입니다.",
+                metrics: [95, 95, 80, 50, 40] 
+            },
+            'pytesseract': {
+                title: "PyTesseract & PIL",
+                desc: "이미지 픽셀 기반 텍스트 인식(OCR) 엔진. Pillow로 리사이징 및 흑백화 전처리 후 다국어 혼용 문서의 텍스트를 추출하여 Native 추출의 맹점을 보완합니다.",
+                metrics: [40, 70, 95, 40, 90] 
+            },
+            'javascript': {
+                title: "JavaScript & difflib",
+                desc: "JS Injection을 통한 DOM 동적 제어(단축키, 커서 삽입) 기능 구현. 파이썬 difflib를 활용해 Native vs OCR 텍스트 유사도를 분석하여 교정 편의성을 극대화합니다.",
+                metrics: [85, 90, 75, 85, 30] 
+            }
+        };
+
+        let radarChart = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const navBtns = document.querySelectorAll('.nav-btn');
+            const sections = document.querySelectorAll('.view-section');
+            const mobileNav = document.getElementById('mobile-nav');
+
+            const stepBtns = document.querySelectorAll('.step-btn');
+            const stepContent = document.getElementById('step-content');
+
+            const techCards = document.querySelectorAll('.tech-card');
+            const techTitle = document.getElementById('tech-title');
+            const techDesc = document.getElementById('tech-desc');
+
+            function switchView(targetId) {
+                navBtns.forEach(btn => {
+                    if(btn.dataset.target === targetId) btn.classList.add('active');
+                    else btn.classList.remove('active');
+                });
+                if(mobileNav.value !== targetId) mobileNav.value = targetId;
+
+                sections.forEach(sec => {
+                    if(sec.id === targetId) {
+                        sec.classList.remove('hidden');
+                        sec.classList.add('fade-in');
+                    } else {
+                        sec.classList.add('hidden');
+                        sec.classList.remove('fade-in');
+                    }
+                });
+
+                if(targetId === 'view-tech' && radarChart) {
+                    radarChart.resize();
+                }
+            }
+
+            navBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => switchView(e.currentTarget.dataset.target));
+            });
+
+            mobileNav.addEventListener('change', (e) => switchView(e.target.value));
+
+            function updateWorkflowStep(stepId) {
+                stepBtns.forEach(btn => {
+                    if(btn.dataset.step === stepId) btn.classList.add('active');
+                    else btn.classList.remove('active');
+                });
+
+                const data = workflowData[stepId];
+                stepContent.innerHTML = `
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-12 h-12 rounded-xl bg-white shadow-sm flex items-center justify-center text-2xl border border-warm-200">
+                            ${data.icon}
+                        </div>
+                        <h4 class="text-xl font-bold text-warm-900">${data.title}</h4>
+                    </div>
+                    ${data.content}
+                `;
+                
+                stepContent.classList.remove('fade-in');
+                void stepContent.offsetWidth; 
+                stepContent.classList.add('fade-in');
+            }
+
+            stepBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => updateWorkflowStep(e.currentTarget.dataset.step));
+            });
+            updateWorkflowStep('1');
+
+            function initChart() {
+                const ctx = document.getElementById('techChart').getContext('2d');
+                radarChart = new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: ['처리 속도 (Speed)', '정밀도 (Accuracy)', '범용성 (Versatility)', '상호작용성 (Interactive)', '리소스 소모 (Resource)'],
+                        datasets: [{
+                            label: '성능 지표',
+                            data: techData['streamlit'].metrics,
+                            backgroundColor: 'rgba(13, 148, 136, 0.2)',
+                            borderColor: 'rgba(13, 148, 136, 1)',
+                            pointBackgroundColor: 'rgba(13, 148, 136, 1)',
+                            pointBorderColor: '#fff',
+                            pointHoverBackgroundColor: '#fff',
+                            pointHoverBorderColor: 'rgba(13, 148, 136, 1)',
+                            borderWidth: 2,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            r: {
+                                angleLines: { color: 'rgba(214, 211, 209, 0.5)' },
+                                grid: { color: 'rgba(214, 211, 209, 0.5)' },
+                                pointLabels: { font: { family: 'Pretendard', size: 12 }, color: '#292524' },
+                                ticks: { display: false, min: 0, max: 100 }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: 'rgba(28, 25, 23, 0.9)',
+                                titleFont: { family: 'Pretendard' },
+                                bodyFont: { family: 'Pretendard' },
+                                padding: 12,
+                                cornerRadius: 8
+                            }
+                        }
+                    }
+                });
+            }
+
+            function updateTech(techId) {
+                techCards.forEach(card => {
+                    if(card.dataset.tech === techId) card.classList.add('active');
+                    else card.classList.remove('active');
+                });
+
+                const data = techData[techId];
+                techTitle.textContent = data.title;
+                techDesc.textContent = data.desc;
+
+                if(radarChart) {
+                    radarChart.data.datasets[0].data = data.metrics;
+                    radarChart.update();
+                }
+            }
+
+            techCards.forEach(card => {
+                card.addEventListener('click', (e) => updateTech(e.currentTarget.dataset.tech));
+            });
+
+            initChart();
+        });
+    </script>
+</body>
+</html>
