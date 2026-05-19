@@ -55,7 +55,7 @@ IMAGE_SAVE_DIR = "extracted_images"
 os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
 # ==========================================
-# 2. 캐싱 및 유틸리티 함수 (속도 최적화 핵심)
+# 2. 캐싱 및 유틸리티 함수
 # ==========================================
 @st.cache_data(show_spinner=False)
 def get_cached_display_img(file_bytes, page_idx, canvas_w):
@@ -111,7 +111,7 @@ def update_final_text(aid):
             break
 
 def re_extract_annotation(anno, doc, page_idx):
-    """명시적인 재추출 버튼 클릭 시에만 실행되는 함수 (오토피팅 무시, 드래그 영역 유지)"""
+    """명시적인 재추출 버튼 클릭 시 실행되는 함수"""
     page = doc.load_page(page_idx)
     fit_rect = fitz.Rect(*anno['pdf_rect'])
     
@@ -127,8 +127,6 @@ def re_extract_annotation(anno, doc, page_idx):
     anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
     anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
     anno['final_text'] = anno['text']
-    if 'pending_extract' in anno:
-        anno['pending_extract'] = False
 
 # ==========================================
 # 3. 사이드바 구성
@@ -263,8 +261,20 @@ if st.session_state.file_bytes:
             ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True)
             ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
-            mode_toggle_pressed = st.button("🔄 모드 전환 (현재: " + ("Modify" if tag_mode=="transform" else "Drag") + ")")
+            # ==========================================
+            # [요청 반영] 상단 고정: 모드 전환 버튼 & 적용 버튼 나란히 배치
+            # ==========================================
+            btn_mode_cols = st.columns([1, 1])
+            with btn_mode_cols[0]:
+                mode_toggle_pressed = st.button("🔄 모드 전환 (현재: " + ("Modify" if tag_mode=="transform" else "Drag") + ")", use_container_width=True)
+            
+            apply_resize_pressed = False
+            with btn_mode_cols[1]:
+                if tag_mode == "transform":
+                    # 수정 모드일 때는 무조건 보이게 렌더링!
+                    apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
 
+            # 캔버스 렌더링
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 255, 0.1)", stroke_width=2, stroke_color="rgba(0, 0, 255, 0.8)",
                 background_image=display_img, initial_drawing=initial_drawing, update_streamlit=True,
@@ -272,38 +282,43 @@ if st.session_state.file_bytes:
                 key=f"canvas_{st.session_state.file_name}_p{st.session_state.current_page}_r{st.session_state.redraw_trigger}",
             )
 
+            # [적용 버튼 클릭 처리 로직]
+            if apply_resize_pressed:
+                if st.session_state.selected_box_id and canvas_result and canvas_result.json_data:
+                    objs = canvas_result.json_data.get("objects", [])
+                    # 현재 선택된 박스의 캔버스 최신 좌표 찾기
+                    target_obj = next((o for o in objs if o.get("id") == st.session_state.selected_box_id), None)
+                    
+                    if target_obj:
+                        n_x0 = target_obj['left'] / pdf_to_canvas_ratio
+                        n_y0 = target_obj['top'] / pdf_to_canvas_ratio
+                        n_x1 = n_x0 + (target_obj['width'] * target_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
+                        n_y1 = n_y0 + (target_obj['height'] * target_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
+                        
+                        # 어노테이션 정보 업데이트 후 재추출
+                        for anno in st.session_state.annotations:
+                            if anno['id'] == st.session_state.selected_box_id:
+                                anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                                with st.spinner("영역 캡처 및 텍스트 재인식 중..."):
+                                    re_extract_annotation(anno, doc, anno['page_idx'])
+                                st.session_state.redraw_trigger += 1
+                                st.rerun()
+                else:
+                    st.warning("선택된 상자가 없습니다. 박스를 클릭하여 선택 후 적용해 주세요.")
+
             if canvas_result and canvas_result.json_data and "objects" in canvas_result.json_data:
                 objs = [obj for obj in canvas_result.json_data["objects"] if obj["type"] == "rect"]
                 
                 if tag_mode == "transform":
-                    # [핵심 변경점] 캔버스 상에서 박스 크기가 달라지면 상태를 즉시 저장하고 대기 플래그를 켭니다.
-                    modified_any = False
-                    for obj in objs:
-                        if "id" in obj:
-                            matched_anno = next((a for a in st.session_state.annotations if a['id'] == obj['id']), None)
-                            if matched_anno:
-                                old_r = matched_anno['pdf_rect']
-                                n_x0 = obj['left'] / pdf_to_canvas_ratio
-                                n_y0 = obj['top'] / pdf_to_canvas_ratio
-                                n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                                n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-                                
-                                # 마우스로 크기/위치를 조금이라도 이동했으면 업데이트
-                                if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
-                                    matched_anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
-                                    matched_anno['pending_extract'] = True  # 추출 대기 켬
-                                    modified_any = True
-                    
-                    if mode_toggle_pressed or modified_any:
-                        if mode_toggle_pressed: st.session_state.selected_box_id = None
-                        st.rerun() # 변경 즉시 화면을 새로고침하여 우측에 버튼을 띄웁니다!
-
+                    if mode_toggle_pressed:
+                        st.session_state.selected_box_id = None
+                        st.rerun()
                 else:
                     if mode_toggle_pressed:
                         st.session_state.selected_box_id = None
                         st.rerun()
                     
-                    # 새 박스 그리기 처리
+                    # 새 박스 Drag해서 그렸을 때의 기본 로직
                     if len(objs) > len(fabric_objects):
                         new_obj = objs[-1]
                         obj_sig = f"{new_obj['left']:.1f}_{new_obj['top']:.1f}_{new_obj['width']:.1f}_{new_obj['height']:.1f}"
@@ -398,19 +413,6 @@ if st.session_state.file_bytes:
 
     with col_edit:
         if curr_anno:
-            # ==========================================
-            # [버튼 표시 로직] 대기 상태일 때만 버튼 노출
-            # ==========================================
-            if curr_anno.get('pending_extract'):
-                st.warning("⚠️ 영역 크기가 조절되었습니다. 텍스트를 재인식하려면 아래 버튼을 클릭하세요.")
-                if st.button("✅ 크기 조절 완료 및 재추출 실행", type="primary", use_container_width=True):
-                    with st.spinner("변경된 영역 캡처 및 OCR 재인식 중..."):
-                        re_extract_annotation(curr_anno, doc, curr_anno['page_idx'])
-                    st.session_state.redraw_trigger += 1 # 캔버스 새로고침 보장
-                    st.rerun()
-                st.markdown("---")
-            # ==========================================
-
             curr_lbl = curr_anno.get('label', '미지정')
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
