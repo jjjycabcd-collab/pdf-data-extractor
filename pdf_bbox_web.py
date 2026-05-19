@@ -613,13 +613,20 @@ if st.session_state.file_bytes:
             c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
             if c2.button("💾 저장"): st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
             
+            # --- 수정된 부분 (여러 줄로 분리) ---
             md_text = f"# 문서 추출 데이터 ({st.session_state.doc_type})\n\n"
             for a in st.session_state.annotations:
                 r = a['pdf_rect']
                 lbl = a.get('label', '미지정')
                 final_t = a.get('final_text', a['text'])
-                md_text += f"### Page {a['page_idx'] + 1}\n- **라벨:** `{lbl}`\n- **좌표:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n#### 📝 추출 데이터\n```text\n{str(final_t)}\n
-```\n---\n\n"
+                
+                md_text += f"### Page {a['page_idx'] + 1}\n"
+                md_text += f"- **라벨:** `{lbl}`\n"
+                md_text += f"- **좌표:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                md_text += "#### 📝 추출 데이터\n"
+                md_text += f"```text\n{str(final_t)}\n```\n"
+                md_text += "---\n\n"
+            # ------------------------------------
             
             c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
             
@@ -635,7 +642,7 @@ if st.session_state.file_bytes:
             if not show_pdf: st.info("왼쪽 목록에서 편집할 항목을 선택하세요.")
 
 # ==========================================
-# 5. 숨김 버튼 마커 및 JS 연동 (기존과 동일하여 생략하지 않고 유지)
+# 5. 숨김 버튼 마커 및 JS 연동
 # ==========================================
 st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
 st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
