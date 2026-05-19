@@ -45,7 +45,8 @@ state_keys = {
     'last_canvas_sig': None, 'file_name': "",
     'active_label': st.session_state.labels[0] if 'labels' in st.session_state else '논문명',
     'redraw_trigger': 0, 'ocr_lang': 'kor+eng', 'doc_type': '단행본',
-    'exclude_keywords': '저자소개'
+    'exclude_keywords': '저자소개',
+    'grouping_mode': False, 'active_group_id': 'G1' # 그룹 관리 상태 추가
 }
 
 for key, default in state_keys.items():
@@ -151,6 +152,18 @@ def get_canvas_obj(canvas_json, selected_id, annotations, current_page):
         return rects[target_idx]
     return None
 
+# [그룹핑 핵심 함수] 자동으로 가장 높은 G번호를 찾아서 다음 번호를 발급
+def get_next_group_id(annotations):
+    max_g = 0
+    for a in annotations:
+        g = a.get('group_id', '')
+        if g.startswith('G') and g[1:].isdigit():
+            try:
+                max_g = max(max_g, int(g[1:]))
+            except:
+                pass
+    return f"G{max_g + 1}"
+
 # ==========================================
 # 3. 사이드바 구성
 # ==========================================
@@ -177,6 +190,7 @@ if uploaded_file is not None:
         st.session_state.crop_counter = 0
         st.session_state.selected_box_id = None
         st.session_state.redraw_trigger += 1
+        st.session_state.active_group_id = "G1"
         st.rerun()
 
 if st.session_state.file_bytes:
@@ -217,7 +231,7 @@ if st.session_state.file_bytes:
                             'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_idx,
                             'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                             'text': basic_text, 'ocr_text': "", 'final_text': basic_text,
-                            'img_name': img_name, 'img_path': img_path, 'label': qf_label, 'group_id': "" # 그룹 ID 속성 추가
+                            'img_name': img_name, 'img_path': img_path, 'label': qf_label, 'group_id': ""
                         })
                         scan_count += 1
                 
@@ -246,7 +260,7 @@ if st.session_state.file_bytes:
         st.error("PDF 페이지를 로드할 수 없습니다.")
         st.stop()
     
-    tag_mode = "transform" if st.session_state.selected_box_id else "rect"
+    tag_mode = "transform" if st.session_state.selected_box_id and not st.session_state.grouping_mode else "rect"
 
     st.write("### PDF 상호작용 구축 도구")
     show_pdf = st.toggle("📄 PDF 뷰어 패널 열기/닫기", value=True)
@@ -265,15 +279,35 @@ if st.session_state.file_bytes:
             ctrl_cols[4].button("⏭", on_click=go_last, args=(total_pages,), use_container_width=True)
             ctrl_cols[5].markdown(f"<div style='padding-top: 5px; font-size:16px; font-weight: bold;'>/ {total_pages}</div>", unsafe_allow_html=True)
 
-            btn_mode_cols = st.columns([1, 1])
+            # ==========================================
+            # 그룹핑 전용 컨트롤 패널 배치
+            # ==========================================
+            btn_mode_cols = st.columns([1, 1, 1.5, 1.3])
+            
             with btn_mode_cols[0]:
-                mode_toggle_pressed = st.button("🔄 모드 전환 (현재: " + ("Modify" if tag_mode=="transform" else "Drag") + ")", use_container_width=True)
+                mode_toggle_pressed = st.button("🔄 모드 전환", use_container_width=True, disabled=st.session_state.grouping_mode)
             
             apply_resize_pressed = False
             with btn_mode_cols[1]:
-                if tag_mode == "transform":
-                    apply_resize_pressed = st.button("✅ 선택 상자 크기/위치 적용 (재추출)", type="primary", use_container_width=True)
+                if tag_mode == "transform" and not st.session_state.grouping_mode:
+                    apply_resize_pressed = st.button("✅ 크기 적용", type="primary", use_container_width=True)
+            
+            with btn_mode_cols[2]:
+                new_g_mode = st.toggle(f"🔗 그룹 묶기 모드 ({st.session_state.active_group_id})", value=st.session_state.grouping_mode)
+                if new_g_mode != st.session_state.grouping_mode:
+                    st.session_state.grouping_mode = new_g_mode
+                    st.session_state.selected_box_id = None # 그룹 모드 전환 시 선택 해제
+                    st.session_state.redraw_trigger += 1
+                    st.rerun()
+                    
+            with btn_mode_cols[3]:
+                if st.session_state.grouping_mode:
+                    next_id = get_next_group_id(st.session_state.annotations)
+                    if st.button(f"➕ 다음 번호({next_id}) 갱신", use_container_width=True):
+                        st.session_state.active_group_id = next_id
+                        st.rerun()
 
+            # [그룹 시각적 하이라이팅 적용]
             if (
                 "current_drawing" not in st.session_state or 
                 st.session_state.get("last_redraw_trigger") != st.session_state.redraw_trigger or
@@ -288,12 +322,23 @@ if st.session_state.file_bytes:
                         c_w, c_h = (r[2] - r[0]) * pdf_to_canvas_ratio, (r[3] - r[1]) * pdf_to_canvas_ratio
                         
                         if is_sel: active_rect_js = f"{{ left: {c_left}, top: {c_top}, width: {c_w}, height: {c_h} }}"
+                        
+                        # 시각적 구분: 현재 묶는 타겟 그룹은 '초록색', 다른 묶인 그룹은 '오렌지색'
+                        is_target_group = st.session_state.grouping_mode and anno.get('group_id') == st.session_state.active_group_id
+                        has_group = bool(anno.get('group_id'))
+                        
+                        if is_sel:
+                            s_col, f_col, s_wid = "rgba(255, 0, 0, 0.9)", "rgba(255, 0, 0, 0.2)", 3
+                        elif is_target_group:
+                            s_col, f_col, s_wid = "rgba(0, 180, 0, 0.9)", "rgba(0, 180, 0, 0.3)", 3
+                        elif has_group:
+                            s_col, f_col, s_wid = "rgba(255, 140, 0, 0.9)", "rgba(255, 140, 0, 0.2)", 2
+                        else:
+                            s_col, f_col, s_wid = "rgba(0, 0, 255, 0.7)", "rgba(0, 0, 255, 0.1)", 2
                             
                         fabric_objects.append({
                             "type": "rect", "left": c_left, "top": c_top, "width": c_w, "height": c_h,
-                            "fill": "rgba(255, 0, 0, 0.2)" if is_sel else "rgba(0, 0, 255, 0.1)",
-                            "stroke": "rgba(255, 0, 0, 0.9)" if is_sel else "rgba(0, 0, 255, 0.7)",
-                            "strokeWidth": 3 if is_sel else 2, "id": anno['id']
+                            "fill": f_col, "stroke": s_col, "strokeWidth": s_wid, "id": anno['id']
                         })
                 
                 st.session_state.current_drawing = {"version": "4.4.0", "objects": fabric_objects}
@@ -318,7 +363,6 @@ if st.session_state.file_bytes:
             # 적용 버튼 로직
             if apply_resize_pressed:
                 sid = st.session_state.selected_box_id
-                
                 target_obj = get_canvas_obj(
                     canvas_result.json_data if canvas_result else None, 
                     sid, 
@@ -342,10 +386,8 @@ if st.session_state.file_bytes:
                     st.session_state.selected_box_id = None
                     st.session_state.redraw_trigger += 1
                     st.rerun()
-                elif sid:
-                    st.warning("⚠️ 선택된 박스의 캔버스 정보를 찾을 수 없습니다. 다시 시도해 주세요.")
 
-            # Drag 모드 상호작용
+            # Drag 모드 상호작용 (선택, 그리기, 그룹 지정)
             if tag_mode == "rect" and not mode_toggle_pressed and not apply_resize_pressed:
                 if canvas_result and canvas_result.json_data:
                     objs = [obj for obj in canvas_result.json_data.get("objects", []) if obj["type"] == "rect"]
@@ -360,6 +402,7 @@ if st.session_state.file_bytes:
                             p_x0, p_y0 = new_obj["left"] / pdf_to_canvas_ratio, new_obj["top"] / pdf_to_canvas_ratio
                             p_x1, p_y1 = p_x0 + (w / pdf_to_canvas_ratio), p_y0 + (h / pdf_to_canvas_ratio)
                             
+                            # [그룹핑 핵심 로직] 마우스 클릭(작은 박스 생성) 시
                             if w < 10 and h < 10:
                                 cx, cy = p_x0 + (w / pdf_to_canvas_ratio)/2, p_y0 + (h / pdf_to_canvas_ratio)/2
                                 clicked_id = None
@@ -370,10 +413,23 @@ if st.session_state.file_bytes:
                                             clicked_id = a['id']
                                             break
                                 if clicked_id:
-                                    st.session_state.selected_box_id = clicked_id
+                                    if st.session_state.grouping_mode:
+                                        # 자석 모드 켜짐 -> 해당 박스에 타겟 그룹 부여/해제 반복
+                                        for a in st.session_state.annotations:
+                                            if a['id'] == clicked_id:
+                                                if a.get('group_id') == st.session_state.active_group_id:
+                                                    a['group_id'] = "" # 토글 해제
+                                                else:
+                                                    a['group_id'] = st.session_state.active_group_id # 부여
+                                                break
+                                    else:
+                                        # 자석 모드 꺼짐 -> 단일 선택
+                                        st.session_state.selected_box_id = clicked_id
+                                        
                                     st.session_state.redraw_trigger += 1
                                     st.rerun()
                                     
+                            # 드래그하여 박스 생성 (추출 로직은 동일)
                             elif w >= 10 and h >= 10:
                                 page = doc.load_page(st.session_state.current_page)
                                 fit_rect = fitz.Rect(p_x0, p_y0, p_x1, p_y1)
@@ -394,12 +450,15 @@ if st.session_state.file_bytes:
                                 basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
                                 ocr_text = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
                                 
+                                # 그룹핑 모드가 켜져있는 상태에서 새로 그리면, 곧바로 그 그룹 번호를 할당해 줌
+                                initial_group = st.session_state.active_group_id if st.session_state.grouping_mode else ""
+                                
                                 st.session_state.annotations.append({
                                     'id': f"id_{st.session_state.crop_counter}", 'page_idx': st.session_state.current_page,
                                     'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                     'text': basic_text, 'ocr_text': ocr_text, 'final_text': basic_text,
                                     'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label,
-                                    'group_id': "" # 생성 시 빈 문자열로 그룹 초기화
+                                    'group_id': initial_group
                                 })
                                 st.session_state.selected_box_id = None
                                 st.session_state.redraw_trigger += 1
@@ -417,7 +476,6 @@ if st.session_state.file_bytes:
             def format_label(aid):
                 if aid == "NEW_MODE": return "✨ [신규 추출 대기 중]"
                 a = anno_dict[aid]
-                # [UI 반영] 그룹 ID가 있으면 목록에 표시
                 group_tag = f" 🔗[{a['group_id']}]" if a.get('group_id') else ""
                 return f"[P{a['page_idx']+1}] [{a.get('label', '미지정')}]{group_tag} | {a.get('final_text', a['text'])[:15].replace(chr(10), ' ')}..."
 
@@ -450,34 +508,12 @@ if st.session_state.file_bytes:
             curr_anno = None
 
     with col_edit:
-        # ==========================================
-        # 🐞 디버그 상태창
-        # ==========================================
+        # 디버그 창은 닫아둡니다 (추후 문제 발생 시 열어보세요)
         with st.expander("🐞 디버그 상태창 (클릭하여 열기)", expanded=False):
             st.write(f"**1. 선택된 박스 ID:** `{st.session_state.selected_box_id}`")
-            
-            current_canvas_obj = get_canvas_obj(
-                canvas_result.json_data if canvas_result else None, 
-                st.session_state.selected_box_id, 
-                st.session_state.annotations, 
-                st.session_state.current_page
-            )
-            
-            if current_canvas_obj:
-                n_x0 = current_canvas_obj['left'] / pdf_to_canvas_ratio
-                n_y0 = current_canvas_obj['top'] / pdf_to_canvas_ratio
-                n_x1 = n_x0 + (current_canvas_obj['width'] * current_canvas_obj.get('scaleX', 1)) / pdf_to_canvas_ratio
-                n_y1 = n_y0 + (current_canvas_obj['height'] * current_canvas_obj.get('scaleY', 1)) / pdf_to_canvas_ratio
-                st.write(f"**2. 캔버스 위 실시간 좌표:** `[{n_x0:.1f}, {n_y0:.1f}, {n_x1:.1f}, {n_y1:.1f}]` ✅")
-            else:
-                st.write("**2. 캔버스 위 실시간 좌표:** `(객체 정보 없음)` ❌")
-                
             if curr_anno:
                 old_r = curr_anno['pdf_rect']
                 st.write(f"**3. 저장된 기존 좌표:** `[{old_r[0]:.1f}, {old_r[1]:.1f}, {old_r[2]:.1f}, {old_r[3]:.1f}]`")
-            else:
-                st.write("**3. 저장된 기존 좌표:** `(선택된 박스 없음)`")
-        # ==========================================
 
         if curr_anno:
             lbl_col, grp_col = st.columns([6, 4])
@@ -486,9 +522,8 @@ if st.session_state.file_bytes:
                 st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
             
             with grp_col:
-                # [그룹핑 UI 추가] 그룹 ID 텍스트 입력
                 curr_group = curr_anno.get('group_id', "")
-                st.text_input("🔗 그룹 ID 지정", value=curr_group, placeholder="예: G1", key=f"group_sel_{curr_anno['id']}", on_change=update_group_id, args=(curr_anno['id'],))
+                st.text_input("🔗 소속 그룹", value=curr_group, placeholder="예: G1", key=f"group_sel_{curr_anno['id']}", on_change=update_group_id, args=(curr_anno['id'],))
 
             with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
                 copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력", key=f"bulk_txt_{curr_anno['id']}")
