@@ -1,4 +1,3 @@
-# pdf_bbox_web.py
 import streamlit as st
 import fitz  # PyMuPDF
 import json
@@ -173,7 +172,6 @@ if st.session_state.file_bytes:
                 if scan_count > 0:
                     st.session_state.redraw_trigger += 1
                     st.success(f"총 {scan_count}개의 '{qf_keyword}' 영역이 추출되었습니다.")
-                    # 무한루프 주범인 st.rerun() 제거 (Streamlit이 알아서 화면 갱신함)
 
     st.sidebar.markdown("---")
     active_idx = st.session_state.labels.index(st.session_state.active_label) if st.session_state.active_label in st.session_state.labels else 0
@@ -261,7 +259,8 @@ if st.session_state.file_bytes:
                                     n_x1 = n_x0 + (obj['width'] * obj.get('scaleX', 1)) / pdf_to_canvas_ratio
                                     n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                     
-                                    if abs(n_x0 - old_r[0]) > 0.5 or abs(n_y0 - old_r[1]) > 0.5 or abs(n_x1 - old_r[2]) > 0.5 or abs(n_y1 - old_r[3]) > 0.5:
+                                    # [수정포인트] 0.5 픽셀 차이 무한진동 방지를 위해 2.0 픽셀로 오차범위 완화
+                                    if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
                                         page = doc.load_page(st.session_state.current_page)
                                         fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
                                         
@@ -384,13 +383,17 @@ if st.session_state.file_bytes:
                             
                             st.session_state.crop_counter += 1
                             img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
-                            page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=fit_rect).save(img_path)
+                            # [수정포인트] 매트릭스 크기를 (4,4)에서 (2,2)로 줄여 저장속도 향상
+                            page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fit_rect).save(img_path)
                             
                             basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
+                            
                             st.session_state.annotations.append({
                                 'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_num - 1,
                                 'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
-                                'text': basic_text, 'ocr_text': "", 'final_text': basic_text,
+                                'text': basic_text, 
+                                'ocr_text': "", # [수정포인트] 일괄 복사시 무거운 OCR 기능은 완전히 제외하여 무한 로딩 방지!
+                                'final_text': basic_text,
                                 'img_path': img_path, 'label': curr_lbl
                             })
                         st.session_state.redraw_trigger += 1
