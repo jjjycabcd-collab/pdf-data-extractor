@@ -110,6 +110,26 @@ def update_final_text(aid):
             a['final_text'] = st.session_state[f"final_input_{aid}"]
             break
 
+def re_extract_annotation(anno, doc, page_idx):
+    """변경된 좌표를 바탕으로 이미지, 텍스트, OCR을 재추출하는 공통 로직 함수"""
+    page = doc.load_page(page_idx)
+    fit_rect = fitz.Rect(*anno['pdf_rect'])
+    
+    st.session_state.crop_counter += 1
+    img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+    img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
+    
+    zoom = 2 if (fit_rect.y1 - fit_rect.y0) > 50 else 4
+    page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=fit_rect).save(img_path)
+    
+    anno['img_name'] = img_name
+    anno['img_path'] = img_path
+    anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
+    anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
+    anno['final_text'] = anno['text']
+    if 'pending_extract' in anno:
+        anno['pending_extract'] = False
+
 # ==========================================
 # 3. 사이드바 구성
 # ==========================================
@@ -141,6 +161,15 @@ if uploaded_file is not None:
 if st.session_state.file_bytes:
     doc = st.session_state.pdf_doc
     total_pages = len(doc)
+
+    # 빈 화면 클릭이나 목록 전환 등으로 포커스가 풀린 대기(pending) 항목 자동 처리
+    need_rerun = False
+    for a in st.session_state.annotations:
+        if a.get('pending_extract') and st.session_state.selected_box_id != a['id']:
+            re_extract_annotation(a, doc, a['page_idx'])
+            need_rerun = True
+    if need_rerun:
+        st.rerun()
 
     with st.sidebar.expander("⚡ 단어 기반 자동 탐색 (Quick-Find)", expanded=False):
         qf_keyword = st.text_input("찾을 키워드 (예: 참고문헌)")
@@ -267,25 +296,9 @@ if st.session_state.file_bytes:
                                     n_y1 = n_y0 + (obj['height'] * obj.get('scaleY', 1)) / pdf_to_canvas_ratio
                                     
                                     if abs(n_x0 - old_r[0]) > 2.0 or abs(n_y0 - old_r[1]) > 2.0 or abs(n_x1 - old_r[2]) > 2.0 or abs(n_y1 - old_r[3]) > 2.0:
-                                        page = doc.load_page(st.session_state.current_page)
-                                        fit_rect = fitz.Rect(n_x0, n_y0, n_x1, n_y1)
-                                        
-                                        if autofit_enabled:
-                                            words = page.get_text("words")
-                                            matched = [fitz.Rect(wd[:4]) for wd in words if fitz.Rect(wd[:4]).intersects(fit_rect)]
-                                            if matched:
-                                                new_rect = matched[0]
-                                                for r in matched[1:]: new_rect |= r
-                                                fit_rect = new_rect
-
-                                        anno['pdf_rect'] = [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1]
-                                        st.session_state.crop_counter += 1
-                                        img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
-                                        page.get_pixmap(matrix=fitz.Matrix(2 if (fit_rect.y1-fit_rect.y0)>50 else 4, 2 if (fit_rect.y1-fit_rect.y0)>50 else 4), clip=fit_rect).save(img_path)
-                                        
-                                        anno['img_path'] = img_path
-                                        anno['text'] = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
-                                        anno['ocr_text'] = extract_text_via_ocr(img_path, st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                                        # 크기 수정(Transform) 시에는 오토피팅 개입 차단 및 즉시 무거운 변환 금지
+                                        anno['pdf_rect'] = [n_x0, n_y0, n_x1, n_y1]
+                                        anno['pending_extract'] = True  # 지연 처리 마킹
                                         modified = True
                                         
                     if mode_toggle_pressed or modified:
@@ -332,7 +345,8 @@ if st.session_state.file_bytes:
                                         fit_rect = new_rect
                                 
                                 st.session_state.crop_counter += 1
-                                img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
+                                img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+                                img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
                                 page.get_pixmap(matrix=fitz.Matrix(2 if (fit_rect.y1-fit_rect.y0)>50 else 4, 2 if (fit_rect.y1-fit_rect.y0)>50 else 4), clip=fit_rect).save(img_path)
                                 
                                 basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
@@ -342,7 +356,7 @@ if st.session_state.file_bytes:
                                     'id': f"id_{st.session_state.crop_counter}", 'page_idx': st.session_state.current_page,
                                     'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
                                     'text': basic_text, 'ocr_text': ocr_text, 'final_text': basic_text,
-                                    'img_path': img_path, 'label': st.session_state.active_label
+                                    'img_name': img_name, 'img_path': img_path, 'label': st.session_state.active_label
                                 })
                                 st.session_state.selected_box_id = None
                                 st.rerun()
@@ -390,6 +404,14 @@ if st.session_state.file_bytes:
 
     with col_edit:
         if curr_anno:
+            # 크기 변경 대기 UI 노출 및 버튼을 통한 강제 재구동 지원
+            if curr_anno.get('pending_extract'):
+                st.warning("⚠️ 영역 크기가 변경되었습니다. 재인식을 원하시면 빈 화면을 클릭하거나 아래 버튼을 클릭하세요.")
+                if st.button("✅ 크기 조절 완료 및 재추출 실행", type="primary", use_container_width=True):
+                    re_extract_annotation(curr_anno, doc, curr_anno['page_idx'])
+                    st.rerun()
+                st.markdown("---")
+
             curr_lbl = curr_anno.get('label', '미지정')
             st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
 
@@ -416,7 +438,8 @@ if st.session_state.file_bytes:
                             if is_dup: continue
                             
                             st.session_state.crop_counter += 1
-                            img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
+                            img_name = f"crop_{st.session_state.crop_counter:03d}.png"
+                            img_path = os.path.join(IMAGE_SAVE_DIR, img_name)
                             page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fit_rect).save(img_path)
                             
                             basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
@@ -427,7 +450,7 @@ if st.session_state.file_bytes:
                                 'text': basic_text, 
                                 'ocr_text': "", 
                                 'final_text': basic_text,
-                                'img_path': img_path, 'label': curr_lbl
+                                'img_name': img_name, 'img_path': img_path, 'label': curr_lbl
                             })
                             copy_count += 1
                             
