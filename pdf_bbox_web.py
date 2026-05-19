@@ -379,4 +379,138 @@ if st.session_state.file_bytes:
     with col_edit:
         if curr_anno:
             curr_lbl = curr_anno.get('label', '미지정')
-            st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_
+            st.selectbox("🏷️ 라벨 변경", options=st.session_state.labels, index=st.session_state.labels.index(curr_lbl) if curr_lbl in st.session_state.labels else 0, key=f"lbl_sel_{curr_anno['id']}", on_change=update_label, args=(curr_anno['id'],))
+
+            with st.expander("📄 이 위치를 다른 페이지에도 일괄 복사", expanded=False):
+                copy_target_pages = st.text_input("복사할 대상 페이지 (예: 1-5, 8)", placeholder="페이지 번호를 쉼표와 하이픈으로 입력")
+                if st.button("📋 현재 좌표 일괄 복사 및 추출 실행"):
+                    target_pages = parse_page_ranges(copy_target_pages, total_pages)
+                    if target_pages:
+                        orig_rect = curr_anno['pdf_rect']
+                        for p_num in target_pages:
+                            if p_num - 1 == curr_anno['page_idx']: continue
+                            page = doc.load_page(p_num - 1)
+                            fit_rect = fitz.Rect(orig_rect)
+                            
+                            st.session_state.crop_counter += 1
+                            img_path = os.path.join(IMAGE_SAVE_DIR, f"crop_{st.session_state.crop_counter:03d}.png")
+                            page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fit_rect).save(img_path)
+                            
+                            basic_text = clean_text(extract_text_with_spaces(page, fit_rect), st.session_state.exclude_keywords)
+                            
+                            st.session_state.annotations.append({
+                                'id': f"id_{st.session_state.crop_counter}", 'page_idx': p_num - 1,
+                                'pdf_rect': [fit_rect.x0, fit_rect.y0, fit_rect.x1, fit_rect.y1],
+                                'text': basic_text, 
+                                'ocr_text': "", 
+                                'final_text': basic_text,
+                                'img_path': img_path, 'label': curr_lbl
+                            })
+                        st.session_state.redraw_trigger += 1
+                        st.rerun()
+
+            col_b, col_o = st.columns(2)
+            with col_b:
+                st.text_area("📝 기본 추출 (PyMuPDF)", value=curr_anno['text'], height=100, disabled=True)
+                st.button("⬇️ 기본 추출 채택", key=f"btn_basic_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'basic'), use_container_width=True)
+            with col_o:
+                st.text_area("🔍 이미지 인식 (OCR)", value=curr_anno.get('ocr_text', ''), height=100, disabled=True)
+                st.button("⬇️ OCR 채택", key=f"btn_ocr_{curr_anno['id']}", on_click=apply_text_to_final, args=(curr_anno['id'], 'ocr'), use_container_width=True)
+                if st.button("🔄 재인식", key=f"btn_reocr_{curr_anno['id']}", use_container_width=True):
+                    curr_anno['ocr_text'] = extract_text_via_ocr(curr_anno['img_path'], st.session_state.ocr_lang, st.session_state.exclude_keywords)
+                    st.rerun()
+
+            st.markdown(f"<div style='border:1px solid #ddd; padding:10px; max-height:150px; overflow-y:auto;'>{get_html_diff(curr_anno['text'], curr_anno.get('ocr_text', ''))}</div>", unsafe_allow_html=True)
+            curr_anno['final_text'] = st.text_area("✨ 최종 교정 텍스트 (직접 수정 가능)", value=curr_anno.get('final_text', curr_anno['text']), height=text_area_height, key=f"final_input_{curr_anno['id']}", on_change=update_final_text, args=(curr_anno['id'],))
+
+            # === 복구된 마크다운 & 다운로드 버튼 섹션 ===
+            c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
+            
+            c1.button("🗑️ 삭제", type="primary", on_click=delete_single_item, args=(curr_anno['id'],))
+            
+            if c2.button("💾 저장"):
+                st.toast("저장 기능은 아직 준비 중입니다.", icon="🚧")
+            
+            # 마크다운 텍스트 생성
+            md_text = f"# 문서 추출 데이터 ({st.session_state.doc_type})\n\n"
+            for a in st.session_state.annotations:
+                r = a['pdf_rect']
+                lbl = a.get('label', '미지정')
+                final_t = a.get('final_text', a['text'])
+                
+                md_text += f"### Page {a['page_idx'] + 1}\n"
+                md_text += f"- **라벨:** `{lbl}`\n"
+                md_text += f"- **좌표:** `[X: {int(r[0])}, Y: {int(r[1])}, W: {int(r[2]-r[0])}, H: {int(r[3]-r[1])}]`\n"
+                md_text += "#### 📝 추출 데이터\n"
+                md_text += f"```text\n{str(final_t)}\n```\n"
+                md_text += "---\n\n"
+            
+            c3.download_button("📝 마크다운", data=md_text, file_name="result.md", mime="text/markdown")
+            
+            # JSON 추출
+            export_data = {
+                "document_meta": {
+                    "file_name": st.session_state.file_name,
+                    "document_type": st.session_state.doc_type
+                },
+                "annotations": [{"page": a['page_idx']+1, "label": a.get('label', '미지정'), "bbox": a['pdf_rect'], "text": a.get('final_text', a['text']), "raw_basic": a['text'], "raw_ocr": a.get('ocr_text', '')} for a in st.session_state.annotations]
+            }
+            c4.download_button("📥 JSON 추출", data=json.dumps(export_data, ensure_ascii=False, indent=4), file_name="result.json", mime="application/json")
+            # ==========================================
+
+# ==========================================
+# 6. 숨김 버튼 및 JavaScript (단축키 등)
+# ==========================================
+st.markdown('<div id="hidden_buttons_marker" style="display:none;"></div>', unsafe_allow_html=True)
+st.markdown("""<style>div.element-container:has(#hidden_buttons_marker) ~ div.element-container { display: none !important; }</style>""", unsafe_allow_html=True)
+
+for i, lbl in enumerate(st.session_state.labels[:9]): st.button(f"HL_{i}", key=f"btn_shortcut_lbl_{i}", on_click=set_active_label, args=(lbl,))
+st.button("HE_ESC", key="btn_shortcut_esc", on_click=handle_esc)
+
+raw_js = f"""
+window._current_active_rect = {active_rect_js};
+window._current_tag_mode = "{tag_mode}";
+if (!window._custom_js_injected) {{
+    window.insertDiffText = function(el) {{
+        const textToInsert = el.innerText;
+        let targetTA = window._lastActiveTA;
+        if (!targetTA) {{
+            const labels = window.document.querySelectorAll('label');
+            for (let lbl of labels) {{
+                if (lbl.innerText.includes("최종 교정 텍스트")) {{
+                    const container = lbl.closest('div[data-testid="stTextArea"]');
+                    if (container) {{ targetTA = container.querySelector('textarea'); break; }}
+                }}
+            }}
+        }}
+        if (targetTA) {{
+            const startPos = (window._lastTASelectionStart !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionStart : targetTA.value.length;
+            const endPos = (window._lastTASelectionEnd !== undefined && window._lastActiveTA === targetTA) ? window._lastTASelectionEnd : targetTA.value.length;
+            const text = targetTA.value;
+            const newText = text.substring(0, startPos) + textToInsert + text.substring(endPos, text.length);
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+            nativeInputValueSetter.call(targetTA, newText);
+            targetTA.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            targetTA.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            targetTA.focus();
+            targetTA.selectionStart = targetTA.selectionEnd = startPos + textToInsert.length;
+            window._lastTASelectionStart = targetTA.selectionStart;
+            window._lastTASelectionEnd = targetTA.selectionEnd;
+            window._lastActiveTA = targetTA;
+            const originalBg = el.style.backgroundColor;
+            el.style.backgroundColor = '#fff000';
+            setTimeout(() => {{ el.style.backgroundColor = originalBg; }}, 150);
+        }}
+    }};
+    window.document.addEventListener('keydown', function(e) {{
+        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+        if (['1','2','3','4','5','6','7','8','9'].includes(e.key)) {{
+            if(e.ctrlKey) e.preventDefault();
+            const btn = Array.from(window.document.querySelectorAll('button')).find(el => el.innerText === 'HL_' + (parseInt(e.key)-1));
+            if (btn) btn.click();
+        }}
+    }});
+    window._custom_js_injected = true;
+}}
+"""
+st.markdown(f'<img src="dummy" onerror="eval(atob(\'{base64.b64encode(raw_js.encode("utf-8")).decode("utf-8")}\'));" style="display:none;" />', unsafe_allow_html=True)
