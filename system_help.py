@@ -1,0 +1,278 @@
+import streamlit as st
+import plotly.graph_objects as go
+
+# 1. 페이지 기본 설정 및 테마 반영
+st.set_page_config(
+    page_title="PDF 상호작용 어노테이션 도구 명세서",
+    page_icon="📄",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# 자체 스타일링을 위한 테일윈드 및 커스텀 CSS 주입
+st.markdown("""
+<style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    html, body, [data-testid="stAppViewContainer"] {
+        font-family: 'Pretendard', sans-serif;
+        background-color: #fafaf9;
+        color: #292524;
+    }
+    .main-title {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #1c1917;
+        text-align: center;
+        margin-bottom: 0.5rem;
+    }
+    .sub-title {
+        font-size: 1.1rem;
+        color: #292524;
+        text-align: center;
+        margin-bottom: 2rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        line-height: 1.6;
+    }
+    .section-card {
+        background-color: #ffffff;
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid #e7e5e4;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        margin-bottom: 2rem;
+    }
+    .step-box {
+        background-color: #f5f5f4;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        border: 1px solid #e7e5e4;
+        min-height: 250px;
+    }
+    .limit-card {
+        background-color: #f5f5f4;
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        border: 1px solid #e7e5e4;
+        height: 100%;
+    }
+    .accent-text {
+        color: #0d9488;
+        font-weight: 600;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# 2. 상단 헤더 및 타이틀
+st.markdown('<h1 class="main-title">📄 PDF 메타데이터 추출 및 상호작용 어노테이션 에디터</h1>', unsafe_allow_html=True)
+st.markdown('''
+<p class="sub-title">
+    본 시스템은 PDF 문서에서 핵심 메타데이터를 효율적으로 추출하고, 구조화된 학습/구축 데이터를 생성하기 위해 개발된 
+    웹 기반 상호작용 도구입니다. 수작업을 최소화하고 데이터 정확도를 극대화합니다.
+</p>
+''', unsafe_allow_html=True)
+
+# 상단 탭 내비게이션 구성 (HTML의 SPA 탭 전환 구조 대체)
+tab1, tab2, tab3 = st.tabs(["⚙️ 처리 절차", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선"])
+
+# -------------------------------------------------------------------------
+# TAB 1: 프로그램 처리 절차 (Interactive Stepper)
+# -------------------------------------------------------------------------
+with tab1:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("⚙️ 프로그램 처리 절차")
+    st.caption("파이프라인의 각 단계를 선택하여 상세 동작 메커니즘을 확인하세요.")
+    st.write("")
+
+    # 왼쪽 버튼 서브메뉴 / 오른쪽 상세 데이터 매핑
+    workflow_data = {
+        "1. 문서 업로드 및 분류": {
+            "icon": "📤",
+            "content": """
+                - **문서 로드:** 사용자가 PDF 파일을 업로드하면 시스템 메모리에 바이트 형태로 로드하여 렌더링을 준비합니다.
+                - **자료유형 설정:** 사이드바를 통해 문서의 메타데이터(자료유형)를 설정합니다.  
+                  *(지침: 표준/지침 및 도서류는 **'단행본'**, 보도자료/신문/연보 등은 **'기타'**로 분류)*
+                - **필터링 자동화:** 텍스트 추출 시 자동으로 배제할 필터 키워드(예: '저자소개')를 설정하여 정제(Cleaning) 과정을 자동화합니다.
+            """
+        },
+        "2. 영역 지정 및 스캔": {
+            "icon": "🔍",
+            "content": """
+                - **수동 지정:** 캔버스 UI를 통해 추출 영역(Bounding Box)을 드래그합니다. '오토피팅' 모드가 작동하여 대략적으로 그린 박스를 실제 텍스트 좌표에 맞춰 정밀 보정합니다.
+                - **자동 스캔 (Quick-Find):** '참고문헌' 등 특정 키워드 입력 시 문서 전체를 스캔하여 해당 키워드가 포함된 좌표를 자동 박싱하고 일괄 추출합니다.
+            """
+        },
+        "3. 하이브리드 추출": {
+            "icon": "⚙️",
+            "content": """
+                지정된 좌표를 바탕으로 두 가지 추출 방식이 **동시에 진행**됩니다.
+                - **기본 추출 (PyMuPDF):** PDF 내부에 포함된 텍스트 레이어를 읽어 들여 빠르고 정확하게 텍스트를 추출합니다.
+                - **이미지 인식 (OCR):** 지정 영역을 고해상도 이미지로 크롭 후 Tesseract 엔진으로 변환합니다. (스캔본 및 손상 문서 대비)
+            """
+        },
+        "4. 데이터 교정 및 그룹핑": {
+            "icon": "📝",
+            "content": """
+                - **Diff 시각화 교정:** 기본 추출 텍스트와 OCR 텍스트 간 차이점을 HTML Diff로 시각화합니다. 색칠된 텍스트 클릭 시 최종 교정 창 커서 위치에 바로 삽입됩니다.
+                - **단락 그룹핑:** 다단(2단, 3단) 논문이나 페이지를 넘나드는 문단 처리를 위해 '그룹 묶기(G1, G2 등)' 기능으로 논리적 연관 데이터를 병합합니다.
+            """
+        },
+        "5. 구조화 및 내보내기": {
+            "icon": "📊",
+            "content": """
+                - **데이터 취합:** 최종 교정된 텍스트, 좌표(Bbox), 라벨링 정보, 그룹 ID 등을 구조적으로 취합합니다.
+                - **Export:** 취합된 데이터를 바탕으로 Markdown 형식 보고서나 기계학습 파이프라인에 바로 활용 가능한 JSON 스키마 파일로 즉시 다운로드합니다.
+            """
+        }
+    }
+
+    step_cols = st.columns([1, 2])
+    with step_cols[0]:
+        selected_step = st.radio(
+            "파이프라인 단계 선택",
+            options=list(workflow_data.keys()),
+            label_visibility="collapsed"
+        )
+
+    with step_cols[1]:
+        step_info = workflow_data[selected_step]
+        st.markdown(f'### {step_info["icon"]} {selected_step}')
+        st.markdown(f'<div class="step-box">{step_info["content"]}</div>', unsafe_allow_html=True)
+        
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# -------------------------------------------------------------------------
+# TAB 2: 사용 기술 및 모듈 분석 (Selectable Cards + Radar Chart)
+# -------------------------------------------------------------------------
+with tab2:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("🛠️ 프로그램 사용 기술 및 모듈 분석")
+    st.caption("기술 스택을 선택하여 해당 모듈의 역할과 시스템 내 핵심 성능 지표(개념도)를 확인하세요.")
+    st.write("")
+
+    tech_data = {
+        "Streamlit & Canvas": {
+            "desc": "파이썬 기반의 직관적인 웹 UI 구현 및 상태(session_state) 관리. streamlit-drawable-canvas를 통해 PDF 이미지 위에서 사용자가 직접 Bbox를 그리는 핵심 프론트엔드 역할을 수행합니다.",
+            "metrics": [90, 40, 85, 95, 60]
+        },
+        "PyMuPDF (fitz)": {
+            "desc": "PDF 페이지 로드, 고해상도 이미지 변환, 좌표 기반 Native 텍스트 추출 및 정밀 단어 좌표 탐색을 담당하는 초고속 PDF 제어 엔진입니다.",
+            "metrics": [95, 95, 80, 50, 40]
+        },
+        "PyTesseract & PIL": {
+            "desc": "이미지 픽셀 기반 텍스트 인식(OCR) 엔진. Pillow로 리사이징 및 흑백화 전처리 후 다국어 혼용 문서의 텍스트를 추출하여 Native 추출의 맹점을 보완합니다.",
+            "metrics": [40, 70, 95, 40, 90]
+        },
+        "JavaScript & difflib": {
+            "desc": "JS Injection을 통한 DOM 동적 제어(단축키, 커서 삽입) 기능 구현. 파이썬 difflib를 활용해 Native vs OCR 텍스트 유사도를 분석하여 교정 편의성을 극대화합니다.",
+            "metrics": [85, 90, 75, 85, 30]
+        }
+    }
+
+    tech_cols = st.columns([1, 1])
+    
+    with tech_cols[0]:
+        selected_tech = st.selectbox("분석할 기술 모듈 선택", options=list(tech_data.keys()))
+        st.write("")
+        st.markdown(f"#### {selected_tech}")
+        st.info(tech_data[selected_tech]["desc"])
+
+    with tech_cols[1]:
+        # Plotly를 이용한 Radar(방사형) 차트 구현
+        categories = ['처리 속도 (Speed)', '정밀도 (Accuracy)', '범용성 (Versatility)', '상호작용성 (Interactive)', '리소스 소모 (Resource)']
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(
+            r=tech_data[selected_tech]["metrics"],
+            theta=categories,
+            fill='toself',
+            name='성능 지표',
+            fillcolor='rgba(13, 148, 136, 0.2)',
+            line=dict(color='rgba(13, 148, 136, 1)', width=2),
+            marker=dict(color='rgba(13, 148, 136, 1)')
+        ))
+
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=False, range=[0, 100]),
+                angularaxis=dict(font=dict(family="Pretendard", size=12))
+            ),
+            showlegend=False,
+            margin=dict(l=40, r=40, t=20, b=20),
+            height=300,
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# -------------------------------------------------------------------------
+# TAB 3: 한계점 및 개선 방안 (Grid Layout Grid Cards)
+# -------------------------------------------------------------------------
+with tab3:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("⚠️ 프로그램 한계점 및 개선 방안")
+    st.caption("시스템 최적화 과정에서 발생한 아키텍처 한계와 이를 극복하기 위한 향후 대안입니다.")
+    st.write("")
+
+    limit_cols1 = st.columns(2)
+    limit_cols2 = st.columns(2)
+
+    with limit_cols1[0]:
+        st.markdown('''
+        <div class="limit-card">
+            <h4>💾 메모리 의존성 (OOM 리스크)</h4>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 업로드된 PDF 파일 전체를 서버 메모리(session_state)에 로드하여 처리합니다.</p>
+            <p style="font-size:0.9rem;"><b>한계:</b> 500페이지 이상 대용량 파일 또는 다중 접속 시 Out Of Memory 에러 발생 가능성이 존재합니다.</p>
+            <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 임시 폴더(tempfile) 저장 및 페이지 단위 스트리밍 로드 아키텍처 도입</p>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    with limit_cols1[1]:
+        st.markdown('''
+        <div class="limit-card">
+            <h4>⚡ OCR 처리 속도와 OS 의존성</h4>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> Tesseract OCR 호출 시 별도의 프로세스가 실행됩니다.</p>
+            <p style="font-size:0.9rem;"><b>한계:</b> Host OS에 Tesseract 바이너리 설치가 강제되며, 다중 Bbox 처리 시 속도 저하 및 스캔 품질에 따른 인식률 편차가 있습니다.</p>
+            <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 비동기 큐잉 시스템 도입 또는 클라우드 기반 OCR API 병행 사용</p>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    st.write("")
+    
+    with limit_cols2[0]:
+        st.markdown('''
+        <div class="limit-card">
+            <h4>🎯 오토피팅(Auto-fitting) 오작동</h4>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 텍스트 레이어 좌표를 참조하여 박스를 정밀하게 자동 조절합니다.</p>
+            <p style="font-size:0.9rem;"><b>한계:</b> 텍스트 레이어가 물리적 이미지와 틀어진 불량 PDF나 복잡한 배경 이미지의 경우 엉뚱한 위치로 피팅될 수 있습니다.</p>
+            <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 레이어 불일치 임계값 감지 로직 추가 및 오토피팅 수동 강제 오버라이드 기능</p>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    with limit_cols2[1]:
+        st.markdown('''
+        <div class="limit-card">
+            <h4>🔄 단방향 저장 구조 (영속성 부재)</h4>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 추출된 데이터는 브라우저 세션 유지 중에만 존재하며 최종 JSON 다운로드로 마무리됩니다.</p>
+            <p style="font-size:0.9rem;"><b>한계:</b> 새로고침이나 예기치 않은 종료 시 작업 내역이 모두 소실됩니다.</p>
+            <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: IndexedDB를 활용한 브라우저 로컬 중간 저장 또는 경량 DB 연동</p>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# 3. 푸터 영역
+st.markdown("""
+<div style="text-align:center; padding: 2rem 0; font-size:0.8rem; color:#78716c;">
+    PDF Meta-Extractor Architecture Documentation © 2026
+</div>
+""", unsafe_allow_html=True)
