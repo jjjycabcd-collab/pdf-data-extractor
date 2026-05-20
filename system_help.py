@@ -94,8 +94,6 @@ st.markdown("""
     .arch-grid > div { flex: 1; }
     .arch-box { background-color: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); height: 100%; display: flex; flex-direction: column; justify-content: center;}
     .arch-box h5 { margin: 0 0 0.5rem 0; color: #0f766e; font-weight: 700; }
-    
-    /* 오류가 있던 부분 수정 및 태그/문자열 닫기 */
     .arch-box p { font-size: 0.85rem; color: #475569; margin: 0; line-height: 1.4; }
 </style>
-""")
+""", unsafe_allow_html=True)
