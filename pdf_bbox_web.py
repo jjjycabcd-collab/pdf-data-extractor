@@ -173,7 +173,7 @@ st.session_state.doc_type = st.sidebar.selectbox("자료유형 선택", options=
 # ---------------------------------------------------------
 # 프로그램 명세서 링크 버튼 렌더링
 # ---------------------------------------------------------
-manual_url = "https://pdf-data-manual.streamlit.app/"
+manual_url = "https://pdf-bbox-manual.streamlit.app/"
 
 link_html = f'''
     <a href="{manual_url}" target="_blank" 
