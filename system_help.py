@@ -61,6 +61,14 @@ st.markdown("""
         color: #0d9488;
         font-weight: 600;
     }
+    
+    /* 아키텍처 다이어그램용 CSS */
+    .arch-layer { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 1.5rem; margin-bottom: 0.5rem; }
+    .arch-title { font-size: 1.1rem; font-weight: 700; color: #334155; margin-bottom: 1rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
+    .arch-box { background-color: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 1rem; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); height: 100%; display: flex; flex-direction: column; justify-content: center;}
+    .arch-box h5 { margin: 0 0 0.5rem 0; color: #0f766e; font-weight: 700; }
+    .arch-box p { font-size: 0.85rem; color: #475569; margin: 0; line-height: 1.4; }
+    .arrow-down { text-align: center; font-size: 1.2rem; font-weight: bold; color: #94a3b8; margin: 0.5rem 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -73,11 +81,11 @@ st.markdown('''
 </p>
 ''', unsafe_allow_html=True)
 
-# 상단 탭 내비게이션 구성 (HTML의 SPA 탭 전환 구조 대체)
-tab1, tab2, tab3 = st.tabs(["⚙️ 처리 절차", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선"])
+# 상단 탭 내비게이션 구성
+tab1, tab2, tab3, tab4 = st.tabs(["⚙️ 처리 절차", "🏗️ 아키텍처 구성도", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선"])
 
 # -------------------------------------------------------------------------
-# TAB 1: 프로그램 처리 절차 (Interactive Stepper)
+# TAB 1: 프로그램 처리 절차
 # -------------------------------------------------------------------------
 with tab1:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -85,7 +93,6 @@ with tab1:
     st.caption("파이프라인의 각 단계를 선택하여 상세 동작 메커니즘을 확인하세요.")
     st.write("")
 
-    # 왼쪽 버튼 서브메뉴 / 오른쪽 상세 데이터 매핑
     workflow_data = {
         "1. 문서 업로드 및 분류": {
             "icon": "📤",
@@ -142,11 +149,57 @@ with tab1:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # -------------------------------------------------------------------------
-# TAB 2: 사용 기술 및 모듈 분석 (Selectable Cards + Radar Chart)
+# TAB 2: 시스템 아키텍처 구성도 (NEW)
 # -------------------------------------------------------------------------
 with tab2:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("🏗️ 시스템 아키텍처 구성도")
+    st.caption("클라이언트 프론트엔드부터 인프라까지, 상호작용 데이터 추출 파이프라인의 논리적 계층과 제어 흐름입니다.")
+    st.write("")
+
+    # 1. Presentation Layer
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">🌐 Client Layer (Presentation)</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: 
+        st.markdown('<div class="arch-box"><h5>🖥️ Web Browser UI</h5><p>- Streamlit & Drawable Canvas<br>- 사용자 Bbox 드래그 및 파라미터 제어</p></div>', unsafe_allow_html=True)
+    with c2: 
+        st.markdown('<div class="arch-box"><h5>⚡ DOM Injector</h5><p>- Custom JS 동적 주입<br>- 단축키 이벤트 & 교정 커서 동기화</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="arrow-down">⬇️ WebSockets / HTTP Request</div>', unsafe_allow_html=True)
+
+    # 2. Application Layer
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">🧠 Core Application Layer (Business Logic)</div>', unsafe_allow_html=True)
+    c3, c4, c5 = st.columns(3)
+    with c3: 
+        st.markdown('<div class="arch-box"><h5>📄 Native Extractor</h5><p>- PyMuPDF (fitz) 엔진<br>- 텍스트 좌표 맵핑 & 오토피팅 제어<br>- 단어 기반 스캔 (Quick-Find)</p></div>', unsafe_allow_html=True)
+    with c4: 
+        st.markdown('<div class="arch-box"><h5>👁️ OCR Processing</h5><p>- PyTesseract / PIL 모듈<br>- 다국어 인식 & 이미지 흑백화 전처리<br>- 임시 크롭 이미지 파일 I/O</p></div>', unsafe_allow_html=True)
+    with c5: 
+        st.markdown('<div class="arch-box"><h5>🔄 State & Data Controller</h5><p>- Session State 영속성 관리<br>- HTML Diff 텍스트 유사도 매칭<br>- 논문 단락/페이지 그룹핑 연산</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="arrow-down">⬇️ Data Parsing & Serialization</div>', unsafe_allow_html=True)
+
+    # 3. Infrastructure & Data Layer
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">💾 Infrastructure & Storage Layer</div>', unsafe_allow_html=True)
+    c6, c7 = st.columns(2)
+    with c6: 
+        st.markdown('<div class="arch-box"><h5>☁️ Cloud Environment</h5><p>- Streamlit Community Cloud<br>- Python 3.11 Runtime<br>- Host OS Binary (Tesseract-OCR)</p></div>', unsafe_allow_html=True)
+    with c7: 
+        st.markdown('<div class="arch-box"><h5>📦 Output Artifacts</h5><p>- 구축 메타데이터 JSON Schema<br>- Markdown 구조화 문서 생성</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# -------------------------------------------------------------------------
+# TAB 3: 사용 기술 및 모듈 분석
+# -------------------------------------------------------------------------
+with tab3:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("🛠️ 프로그램 사용 기술 및 모듈 분석")
     st.caption("기술 스택을 선택하여 해당 모듈의 역할과 시스템 내 핵심 성능 지표(개념도)를 확인하세요.")
@@ -180,7 +233,6 @@ with tab2:
         st.info(tech_data[selected_tech]["desc"])
 
     with tech_cols[1]:
-        # Plotly를 이용한 Radar(방사형) 차트 구현
         categories = ['처리 속도 (Speed)', '정밀도 (Accuracy)', '범용성 (Versatility)', '상호작용성 (Interactive)', '리소스 소모 (Resource)']
         
         fig = go.Figure()
@@ -211,9 +263,9 @@ with tab2:
 
 
 # -------------------------------------------------------------------------
-# TAB 3: 한계점 및 개선 방안 (Grid Layout Grid Cards)
+# TAB 4: 한계점 및 개선 방안
 # -------------------------------------------------------------------------
-with tab3:
+with tab4:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("⚠️ 프로그램 한계점 및 개선 방안")
     st.caption("시스템 최적화 과정에서 발생한 아키텍처 한계와 이를 극복하기 위한 향후 대안입니다.")
