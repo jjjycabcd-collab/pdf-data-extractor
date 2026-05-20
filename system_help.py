@@ -197,7 +197,7 @@ with tab2:
         fig.update_layout(
             polar=dict(
                 radialaxis=dict(visible=False, range=[0, 100]),
-                angularaxis=dict(font=dict(family="Pretendard", size=12))
+                angularaxis=dict(tickfont=dict(family="Pretendard", size=12))
             ),
             showlegend=False,
             margin=dict(l=40, r=40, t=20, b=20),
