@@ -81,8 +81,11 @@ st.markdown('''
 </p>
 ''', unsafe_allow_html=True)
 
-# 상단 탭 내비게이션 구성
-tab1, tab2, tab3, tab4 = st.tabs(["⚙️ 처리 절차", "🏗️ 아키텍처 구성도", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선"])
+# 상단 탭 내비게이션 구성 (총 6개 탭으로 확장)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "⚙️ 처리 절차", "🏗️ 기존 아키텍처(Python)", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선",
+    "🔄 eGov(3.9) 전환 절차", "☕ Java 기반 아키텍처"
+])
 
 # -------------------------------------------------------------------------
 # TAB 1: 프로그램 처리 절차
@@ -150,12 +153,12 @@ with tab1:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# TAB 2: 시스템 아키텍처 구성도 (NEW)
+# TAB 2: 시스템 아키텍처 구성도 (Python)
 # -------------------------------------------------------------------------
 with tab2:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("🏗️ 시스템 아키텍처 구성도")
-    st.caption("클라이언트 프론트엔드부터 인프라까지, 상호작용 데이터 추출 파이프라인의 논리적 계층과 제어 흐름입니다.")
+    st.subheader("🏗️ 기존 시스템 아키텍처 구성도 (Python 기반)")
+    st.caption("현재 운영 중인 Streamlit 기반 클라이언트 프론트엔드 및 파이프라인의 제어 흐름입니다.")
     st.write("")
 
     # 1. Presentation Layer
@@ -175,11 +178,11 @@ with tab2:
     st.markdown('<div class="arch-title">🧠 Core Application Layer (Business Logic)</div>', unsafe_allow_html=True)
     c3, c4, c5 = st.columns(3)
     with c3: 
-        st.markdown('<div class="arch-box"><h5>📄 Native Extractor</h5><p>- PyMuPDF (fitz) 엔진<br>- 텍스트 좌표 맵핑 & 오토피팅 제어<br>- 단어 기반 스캔 (Quick-Find)</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>📄 Native Extractor</h5><p>- PyMuPDF (fitz) 엔진<br>- 텍스트 좌표 맵핑 & 오토피팅 제어</p></div>', unsafe_allow_html=True)
     with c4: 
-        st.markdown('<div class="arch-box"><h5>👁️ OCR Processing</h5><p>- PyTesseract / PIL 모듈<br>- 다국어 인식 & 이미지 흑백화 전처리<br>- 임시 크롭 이미지 파일 I/O</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>👁️ OCR Processing</h5><p>- PyTesseract / PIL 모듈<br>- 다국어 인식 & 이미지 전처리</p></div>', unsafe_allow_html=True)
     with c5: 
-        st.markdown('<div class="arch-box"><h5>🔄 State & Data Controller</h5><p>- Session State 영속성 관리<br>- HTML Diff 텍스트 유사도 매칭<br>- 논문 단락/페이지 그룹핑 연산</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>🔄 State & Data Controller</h5><p>- Streamlit Session State 관리<br>- 데이터 병합 및 그룹핑 연산</p></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="arrow-down">⬇️ Data Parsing & Serialization</div>', unsafe_allow_html=True)
@@ -189,20 +192,20 @@ with tab2:
     st.markdown('<div class="arch-title">💾 Infrastructure & Storage Layer</div>', unsafe_allow_html=True)
     c6, c7 = st.columns(2)
     with c6: 
-        st.markdown('<div class="arch-box"><h5>☁️ Cloud Environment</h5><p>- Streamlit Community Cloud<br>- Python 3.11 Runtime<br>- Host OS Binary (Tesseract-OCR)</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>☁️ Cloud Environment</h5><p>- Python 3.11 Runtime<br>- Host OS Binary (Tesseract-OCR)</p></div>', unsafe_allow_html=True)
     with c7: 
         st.markdown('<div class="arch-box"><h5>📦 Output Artifacts</h5><p>- 구축 메타데이터 JSON Schema<br>- Markdown 구조화 문서 생성</p></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # -------------------------------------------------------------------------
 # TAB 3: 사용 기술 및 모듈 분석
 # -------------------------------------------------------------------------
 with tab3:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("🛠️ 프로그램 사용 기술 및 모듈 분석")
-    st.caption("기술 스택을 선택하여 해당 모듈의 역할과 시스템 내 핵심 성능 지표(개념도)를 확인하세요.")
+    st.subheader("🛠️ 기존 시스템 사용 기술 및 모듈 분석")
+    st.caption("현재 구성된 기술 스택의 핵심 역할과 성능 지표를 확인하세요.")
     st.write("")
 
     tech_data = {
@@ -281,18 +284,18 @@ with tab4:
             <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 업로드된 PDF 파일 전체를 서버 메모리(session_state)에 로드하여 처리합니다.</p>
             <p style="font-size:0.9rem;"><b>한계:</b> 500페이지 이상 대용량 파일 또는 다중 접속 시 Out Of Memory 에러 발생 가능성이 존재합니다.</p>
             <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
-            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 임시 폴더(tempfile) 저장 및 페이지 단위 스트리밍 로드 아키텍처 도입</p>
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 파일 시스템/DB를 활용한 페이징 처리 및 eGov 기반 세션 관리로 전환</p>
         </div>
         ''', unsafe_allow_html=True)
 
     with limit_cols1[1]:
         st.markdown('''
         <div class="limit-card">
-            <h4>⚡ OCR 처리 속도와 OS 의존성</h4>
-            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> Tesseract OCR 호출 시 별도의 프로세스가 실행됩니다.</p>
-            <p style="font-size:0.9rem;"><b>한계:</b> Host OS에 Tesseract 바이너리 설치가 강제되며, 다중 Bbox 처리 시 속도 저하 및 스캔 품질에 따른 인식률 편차가 있습니다.</p>
+            <h4>⚡ 단일 스레드 병목 현상</h4>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> OCR 및 PDF 파싱이 Streamlit의 단일 프로세스 사이클에서 동기적으로 실행됩니다.</p>
+            <p style="font-size:0.9rem;"><b>한계:</b> 다중 Bbox 처리 시 응답 지연(UI 프리징)이 발생할 수 있습니다.</p>
             <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
-            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 비동기 큐잉 시스템 도입 또는 클라우드 기반 OCR API 병행 사용</p>
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: Java Spring 비동기 처리(@Async) 또는 클라우드 메시지 큐(MQ) 도입</p>
         </div>
         ''', unsafe_allow_html=True)
 
@@ -316,9 +319,117 @@ with tab4:
             <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 추출된 데이터는 브라우저 세션 유지 중에만 존재하며 최종 JSON 다운로드로 마무리됩니다.</p>
             <p style="font-size:0.9rem;"><b>한계:</b> 새로고침이나 예기치 않은 종료 시 작업 내역이 모두 소실됩니다.</p>
             <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
-            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: IndexedDB를 활용한 브라우저 로컬 중간 저장 또는 경량 DB 연동</p>
+            <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: eGovFrame + RDBMS 연동을 통한 실시간 데이터베이스 영구 저장</p>
         </div>
         ''', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# -------------------------------------------------------------------------
+# TAB 5: eGov(3.9) 전환 절차 (NEW)
+# -------------------------------------------------------------------------
+with tab5:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("🔄 전자정부표준프레임워크(3.9) 변환 방법 및 절차")
+    st.caption("동일한 기능과 UI를 유지하면서 Java/Spring 기반의 엔터프라이즈 환경으로 마이그레이션하기 위한 전략입니다.")
+    st.write("")
+
+    egov_steps = {
+        "1. 아키텍처 및 라이브러리 맵핑 (Analysis)": {
+            "icon": "📝",
+            "content": """
+                - **Python -> Java 대체 모듈 선정:**
+                  - `PyMuPDF` ➔ `Apache PDFBox` 또는 `iText` (PDF 렌더링 및 네이티브 텍스트 좌표 추출)
+                  - `PyTesseract` ➔ `Tess4J` (Tesseract JNA 래퍼 활용)
+                  - `Streamlit UI` ➔ `JSP` + `HTML5 Canvas (Fabric.js)`
+                - **데이터베이스 설계:** 현재 인메모리(Session State)로 관리되는 메타데이터를 RDBMS(MariaDB 등) 및 MyBatis VO 모델로 정규화 설계합니다.
+            """
+        },
+        "2. 프론트엔드 UI 재구축 (Frontend)": {
+            "icon": "🎨",
+            "content": """
+                - **Canvas 인터랙션 구현:** `Fabric.js`나 `Konva.js`와 같은 JavaScript 캔버스 라이브러리를 사용하여 JSP 화면 내에 PDF 이미지를 띄우고, Bbox 드래그 앤 드롭 기능을 개발합니다.
+                - **비동기 통신(Ajax) 연결:** 사용자가 박스를 그릴 때마다 해당 좌표 데이터를 Fetch API나 jQuery Ajax를 통해 Spring Controller로 비동기 전송합니다.
+            """
+        },
+        "3. 비즈니스 로직 이관 (Backend)": {
+            "icon": "⚙️",
+            "content": """
+                - **eGov 3.9 (Spring MVC) 구성:** Controller - Service - DAO 계층 구조에 따라 PDF 처리 및 추출 비즈니스 로직을 구현합니다.
+                - **하이브리드 추출 구현:** 전달받은 박스 좌표(`X, Y, W, H`)를 기반으로 `PDFBox`를 이용한 텍스트 추출과 `Tess4J`를 이용한 이미지 OCR 추출을 동시 수행(Multi-threading)하는 로직을 작성합니다.
+            """
+        },
+        "4. 검증 및 시스템 연동 (Integration)": {
+            "icon": "🔗",
+            "content": """
+                - **Diff 검증 모듈 포팅:** Python의 `difflib` 대신 Java의 `java-diff-utils` 라이브러리를 적용하여 Native/OCR 간 텍스트 비교 하이라이팅을 구현합니다.
+                - **데이터 영속성 확보:** 최종 교정된 어노테이션 데이터를 JSON 형태뿐만 아니라, MyBatis를 통해 시스템 DB에 실시간 적재하여 데이터 손실을 방지합니다.
+            """
+        }
+    }
+
+    egov_cols = st.columns([1.2, 2.8])
+    with egov_cols[0]:
+        selected_egov_step = st.radio(
+            "마이그레이션 단계 선택",
+            options=list(egov_steps.keys()),
+            key="egov_radio",
+            label_visibility="collapsed"
+        )
+
+    with egov_cols[1]:
+        egov_info = egov_steps[selected_egov_step]
+        st.markdown(f'### {egov_info["icon"]} {selected_egov_step}')
+        st.markdown(f'<div class="step-box" style="min-height: 200px;">{egov_info["content"]}</div>', unsafe_allow_html=True)
+        
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# -------------------------------------------------------------------------
+# TAB 6: Java 기반 아키텍처 (NEW)
+# -------------------------------------------------------------------------
+with tab6:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("☕ eGov(3.9) 기반 아키텍처 구성도 및 사용 기술")
+    st.caption("대용량 트래픽 처리와 데이터 무결성 보장을 위해 재설계된 3-Tier 기반 아키텍처 모델입니다.")
+    st.write("")
+
+    # 1. Presentation Layer (JSP + JS)
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">🌐 Presentation Layer (Client & Web)</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: 
+        st.markdown('<div class="arch-box"><h5>🖥️ JSP & HTML5 UI</h5><p>- eGov UI 표준 템플릿<br>- Bootstrap / Tailwind CSS</p></div>', unsafe_allow_html=True)
+    with c2: 
+        st.markdown('<div class="arch-box"><h5>🎨 Fabric.js (Canvas)</h5><p>- PDF 렌더링 및 오버레이<br>- Bbox 드로잉 & 이벤트 리스너</p></div>', unsafe_allow_html=True)
+    with c3: 
+        st.markdown('<div class="arch-box"><h5>⚡ REST / Ajax</h5><p>- JSON 기반 비동기 데이터 통신<br>- 좌표 및 텍스트 교환</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="arrow-down">⬇️ Spring DispatcherServlet</div>', unsafe_allow_html=True)
+
+    # 2. Business Logic Layer (eGov 3.9 / Spring MVC)
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">🧠 Business Logic Layer (eGovFrame 3.9)</div>', unsafe_allow_html=True)
+    c4, c5, c6 = st.columns(3)
+    with c4: 
+        st.markdown('<div class="arch-box"><h5>🎯 Spring Controller</h5><p>- Request 매핑 및 권한 검증<br>- View(JSP) 및 API 라우팅</p></div>', unsafe_allow_html=True)
+    with c5: 
+        st.markdown('<div class="arch-box"><h5>📄 Apache PDFBox</h5><p>- PDF Document 파싱<br>- 텍스트 레이어 좌표 매칭 및 오토피팅(Native 대체)</p></div>', unsafe_allow_html=True)
+    with c6: 
+        st.markdown('<div class="arch-box"><h5>👁️ Tess4J (OCR)</h5><p>- Tesseract 엔진 Java 연동<br>- 이미지 크롭 및 문자인식<br>- java-diff-utils 교정 로직</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="arrow-down">⬇️ MyBatis ORM</div>', unsafe_allow_html=True)
+
+    # 3. Data Access Layer
+    st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
+    st.markdown('<div class="arch-title">💾 Data Access Layer (DBMS & Storage)</div>', unsafe_allow_html=True)
+    c7, c8 = st.columns(2)
+    with c7: 
+        st.markdown('<div class="arch-box"><h5>🗄️ Relational DB (RDBMS)</h5><p>- MariaDB / PostgreSQL<br>- 문서 메타, Bbox 좌표, 텍스트 데이터 영구 저장</p></div>', unsafe_allow_html=True)
+    with c8: 
+        st.markdown('<div class="arch-box"><h5>📂 File System / NAS</h5><p>- 원본 PDF 파일 저장소<br>- 추출 완료된 학습용 JSON/XML 산출물 관리</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
