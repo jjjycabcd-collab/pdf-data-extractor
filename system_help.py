@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.graph_objects as go
+import os
 
 # 1. 페이지 기본 설정 및 테마 반영
 st.set_page_config(
@@ -48,7 +49,8 @@ st.markdown("""
         padding: 1.5rem;
         border-radius: 0.75rem;
         border: 1px solid #e7e5e4;
-        min-height: 250px;
+        min-height: 200px;
+        margin-bottom: 1.5rem;
     }
     .limit-card {
         background-color: #f5f5f4;
@@ -111,7 +113,7 @@ with tab1:
                   *(지침: 표준/지침 및 도서류는 **'단행본'**, 보도자료/신문/연보 등은 **'기타'**로 분류)*
                 - **필터링 자동화:** 텍스트 추출 시 자동으로 배제할 필터 키워드(예: '저자소개')를 설정하여 정제(Cleaning) 과정을 자동화합니다.
             """,
-            "mockup": "📸 [예시 화면] 좌측 사이드바의 파일 업로드 위젯 및 자료유형(단행본/기타) 선택 영역"
+            "image": "image_a19926.png"
         },
         "2. 영역 지정 및 스캔": {
             "icon": "🔍",
@@ -119,7 +121,7 @@ with tab1:
                 - **수동 지정:** 캔버스 UI를 통해 추출 영역(Bounding Box)을 드래그합니다. '오토피팅' 모드가 작동하여 대략적으로 그린 박스를 실제 텍스트 좌표에 맞춰 정밀 보정합니다.
                 - **자동 스캔 (Quick-Find):** '참고문헌' 등 특정 키워드 입력 시 문서 전체를 스캔하여 해당 키워드가 포함된 좌표를 자동 박싱하고 일괄 추출합니다.
             """,
-            "mockup": "📸 [예시 화면] 메인 PDF 뷰어 캔버스에서 마우스로 텍스트 영역을 드래그하여 박싱하는 화면"
+            "image": "image_a19944.png"
         },
         "3. 하이브리드 추출": {
             "icon": "⚙️",
@@ -128,7 +130,7 @@ with tab1:
                 - **기본 추출 (PyMuPDF):** PDF 내부에 포함된 텍스트 레이어를 읽어 들여 빠르고 정확하게 텍스트를 추출합니다.
                 - **이미지 인식 (OCR):** 지정 영역을 고해상도 이미지로 크롭 후 Tesseract 엔진으로 변환합니다. (스캔본 및 손상 문서 대비)
             """,
-            "mockup": "📸 [예시 화면] 백그라운드에서 PyMuPDF와 OCR이 텍스트를 파싱하여 입력창에 불러오는 결과 화면"
+            "image": "image_a19967.png"
         },
         "4. 데이터 교정 및 그룹핑": {
             "icon": "📝",
@@ -136,7 +138,7 @@ with tab1:
                 - **Diff 시각화 교정:** 기본 추출 텍스트와 OCR 텍스트 간 차이점을 HTML Diff로 시각화합니다. 색칠된 텍스트 클릭 시 최종 교정 창 커서 위치에 바로 삽입됩니다.
                 - **단락 그룹핑:** 다단(2단, 3단) 논문이나 페이지를 넘나드는 문단 처리를 위해 '그룹 묶기(G1, G2 등)' 기능으로 논리적 연관 데이터를 병합합니다.
             """,
-            "mockup": "📸 [예시 화면] 우측 패널의 HTML Diff 하이라이팅 및 그룹 ID 부여 인터페이스"
+            "image": "image_a199a5.png"
         },
         "5. 구조화 및 내보내기": {
             "icon": "📊",
@@ -144,7 +146,7 @@ with tab1:
                 - **데이터 취합:** 최종 교정된 텍스트, 좌표(Bbox), 라벨링 정보, 그룹 ID 등을 구조적으로 취합합니다.
                 - **Export:** 취합된 데이터를 바탕으로 Markdown 형식 보고서나 기계학습 파이프라인에 바로 활용 가능한 JSON 스키마 파일로 즉시 다운로드합니다.
             """,
-            "mockup": "📸 [예시 화면] 하단의 Markdown 및 JSON 다운로드 버튼과 생성된 결과물 뷰어"
+            "image": "image_a19c8a.png"
         }
     }
 
@@ -161,14 +163,13 @@ with tab1:
         st.markdown(f'### {step_info["icon"]} {selected_step}')
         st.markdown(f'<div class="step-box">{step_info["content"]}</div>', unsafe_allow_html=True)
         
-        # 예시 화면 Placeholder 영역
-        st.markdown(f'''
-        <div style="width: 100%; height: 220px; background-color: #f8fafc; border: 2px dashed #94a3b8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin-top: 1.5rem; color: #475569; font-weight: 600; text-align: center; padding: 1rem;">
-            {step_info["mockup"]}
-            <span style="font-size: 0.8rem; font-weight: 400; margin-top: 0.5rem; color: #94a3b8;">※ 추후 실제 캡처 화면으로 교체될 영역입니다.</span>
-        </div>
-        ''', unsafe_allow_html=True)
-        
+        # 사용자가 업로드한 캡처 이미지 렌더링
+        img_path = step_info["image"]
+        if os.path.exists(img_path):
+            st.image(img_path, use_container_width=True, caption=f"{selected_step} 예시 화면")
+        else:
+            st.warning(f"⚠️ 이미지를 찾을 수 없습니다: `{img_path}`\n\n깃허브 리포지토리에 파일이 업로드되어 있는지 확인해주세요.")
+            
     st.markdown('</div>', unsafe_allow_html=True)
 
 
