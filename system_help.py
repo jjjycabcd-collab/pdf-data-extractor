@@ -69,6 +69,12 @@ st.markdown("""
     .arch-box h5 { margin: 0 0 0.5rem 0; color: #0f766e; font-weight: 700; }
     .arch-box p { font-size: 0.85rem; color: #475569; margin: 0; line-height: 1.4; }
     .arrow-down { text-align: center; font-size: 1.2rem; font-weight: bold; color: #94a3b8; margin: 0.5rem 0; }
+
+    /* 비교표 테이블 CSS */
+    .compare-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    .compare-table th { background-color: #f1f5f9; color: #334155; padding: 12px; border: 1px solid #cbd5e1; font-weight: 700; text-align: center; }
+    .compare-table td { padding: 12px; border: 1px solid #cbd5e1; color: #475569; font-size: 0.95rem; }
+    .compare-table td:first-child { font-weight: 600; text-align: center; background-color: #f8fafc; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,7 +87,7 @@ st.markdown('''
 </p>
 ''', unsafe_allow_html=True)
 
-# 상단 탭 내비게이션 구성 (총 6개 탭으로 확장)
+# 상단 탭 내비게이션 구성
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "⚙️ 처리 절차", "🏗️ 기존 아키텍처(Python)", "🛠️ 사용 기술 및 모듈", "⚠️ 한계점 및 개선",
     "🔄 eGov(3.9) 전환 절차", "☕ Java 기반 아키텍처"
@@ -104,14 +110,16 @@ with tab1:
                 - **자료유형 설정:** 사이드바를 통해 문서의 메타데이터(자료유형)를 설정합니다.  
                   *(지침: 표준/지침 및 도서류는 **'단행본'**, 보도자료/신문/연보 등은 **'기타'**로 분류)*
                 - **필터링 자동화:** 텍스트 추출 시 자동으로 배제할 필터 키워드(예: '저자소개')를 설정하여 정제(Cleaning) 과정을 자동화합니다.
-            """
+            """,
+            "mockup": "📸 [예시 화면] 좌측 사이드바의 파일 업로드 위젯 및 자료유형(단행본/기타) 선택 영역"
         },
         "2. 영역 지정 및 스캔": {
             "icon": "🔍",
             "content": """
                 - **수동 지정:** 캔버스 UI를 통해 추출 영역(Bounding Box)을 드래그합니다. '오토피팅' 모드가 작동하여 대략적으로 그린 박스를 실제 텍스트 좌표에 맞춰 정밀 보정합니다.
                 - **자동 스캔 (Quick-Find):** '참고문헌' 등 특정 키워드 입력 시 문서 전체를 스캔하여 해당 키워드가 포함된 좌표를 자동 박싱하고 일괄 추출합니다.
-            """
+            """,
+            "mockup": "📸 [예시 화면] 메인 PDF 뷰어 캔버스에서 마우스로 텍스트 영역을 드래그하여 박싱하는 화면"
         },
         "3. 하이브리드 추출": {
             "icon": "⚙️",
@@ -119,21 +127,24 @@ with tab1:
                 지정된 좌표를 바탕으로 두 가지 추출 방식이 **동시에 진행**됩니다.
                 - **기본 추출 (PyMuPDF):** PDF 내부에 포함된 텍스트 레이어를 읽어 들여 빠르고 정확하게 텍스트를 추출합니다.
                 - **이미지 인식 (OCR):** 지정 영역을 고해상도 이미지로 크롭 후 Tesseract 엔진으로 변환합니다. (스캔본 및 손상 문서 대비)
-            """
+            """,
+            "mockup": "📸 [예시 화면] 백그라운드에서 PyMuPDF와 OCR이 텍스트를 파싱하여 입력창에 불러오는 결과 화면"
         },
         "4. 데이터 교정 및 그룹핑": {
             "icon": "📝",
             "content": """
                 - **Diff 시각화 교정:** 기본 추출 텍스트와 OCR 텍스트 간 차이점을 HTML Diff로 시각화합니다. 색칠된 텍스트 클릭 시 최종 교정 창 커서 위치에 바로 삽입됩니다.
                 - **단락 그룹핑:** 다단(2단, 3단) 논문이나 페이지를 넘나드는 문단 처리를 위해 '그룹 묶기(G1, G2 등)' 기능으로 논리적 연관 데이터를 병합합니다.
-            """
+            """,
+            "mockup": "📸 [예시 화면] 우측 패널의 HTML Diff 하이라이팅 및 그룹 ID 부여 인터페이스"
         },
         "5. 구조화 및 내보내기": {
             "icon": "📊",
             "content": """
                 - **데이터 취합:** 최종 교정된 텍스트, 좌표(Bbox), 라벨링 정보, 그룹 ID 등을 구조적으로 취합합니다.
                 - **Export:** 취합된 데이터를 바탕으로 Markdown 형식 보고서나 기계학습 파이프라인에 바로 활용 가능한 JSON 스키마 파일로 즉시 다운로드합니다.
-            """
+            """,
+            "mockup": "📸 [예시 화면] 하단의 Markdown 및 JSON 다운로드 버튼과 생성된 결과물 뷰어"
         }
     }
 
@@ -150,7 +161,16 @@ with tab1:
         st.markdown(f'### {step_info["icon"]} {selected_step}')
         st.markdown(f'<div class="step-box">{step_info["content"]}</div>', unsafe_allow_html=True)
         
+        # 예시 화면 Placeholder 영역
+        st.markdown(f'''
+        <div style="width: 100%; height: 220px; background-color: #f8fafc; border: 2px dashed #94a3b8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin-top: 1.5rem; color: #475569; font-weight: 600; text-align: center; padding: 1rem;">
+            {step_info["mockup"]}
+            <span style="font-size: 0.8rem; font-weight: 400; margin-top: 0.5rem; color: #94a3b8;">※ 추후 실제 캡처 화면으로 교체될 영역입니다.</span>
+        </div>
+        ''', unsafe_allow_html=True)
+        
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # -------------------------------------------------------------------------
 # TAB 2: 시스템 아키텍처 구성도 (Python)
@@ -161,7 +181,6 @@ with tab2:
     st.caption("현재 운영 중인 Streamlit 기반 클라이언트 프론트엔드 및 파이프라인의 제어 흐름입니다.")
     st.write("")
 
-    # 1. Presentation Layer
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">🌐 Client Layer (Presentation)</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
@@ -173,7 +192,6 @@ with tab2:
 
     st.markdown('<div class="arrow-down">⬇️ WebSockets / HTTP Request</div>', unsafe_allow_html=True)
 
-    # 2. Application Layer
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">🧠 Core Application Layer (Business Logic)</div>', unsafe_allow_html=True)
     c3, c4, c5 = st.columns(3)
@@ -187,7 +205,6 @@ with tab2:
 
     st.markdown('<div class="arrow-down">⬇️ Data Parsing & Serialization</div>', unsafe_allow_html=True)
 
-    # 3. Infrastructure & Data Layer
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">💾 Infrastructure & Storage Layer</div>', unsafe_allow_html=True)
     c6, c7 = st.columns(2)
@@ -326,7 +343,7 @@ with tab4:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# TAB 5: eGov(3.9) 전환 절차 (NEW)
+# TAB 5: eGov(3.9) 전환 절차
 # -------------------------------------------------------------------------
 with tab5:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -381,11 +398,66 @@ with tab5:
         egov_info = egov_steps[selected_egov_step]
         st.markdown(f'### {egov_info["icon"]} {selected_egov_step}')
         st.markdown(f'<div class="step-box" style="min-height: 200px;">{egov_info["content"]}</div>', unsafe_allow_html=True)
-        
+    
+    st.markdown("<br><hr><br>", unsafe_allow_html=True)
+    
+    # AS-IS vs TO-BE 비교표 추가
+    st.markdown("#### 📊 기술 스택 전환 비교표 (AS-IS vs TO-BE)")
+    st.markdown('''
+    <table class="compare-table">
+        <thead>
+            <tr>
+                <th width="15%">구분</th>
+                <th width="35%">AS-IS (현재 Python 환경)</th>
+                <th width="35%">TO-BE (eGov 3.9 환경)</th>
+                <th width="15%">기대 효과</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>프론트엔드 UI</td>
+                <td>Streamlit (Python 기반 동적 렌더링)</td>
+                <td>JSP, HTML5 Canvas (Fabric.js), AJAX</td>
+                <td>표준 웹 접근성 및 렌더링 최적화</td>
+            </tr>
+            <tr>
+                <td>백엔드 프레임워크</td>
+                <td>Streamlit 단일 스레드 (Session State)</td>
+                <td>eGovFrame 3.9 (Spring MVC, Java)</td>
+                <td>대용량 트래픽 처리 및 안정성</td>
+            </tr>
+            <tr>
+                <td>PDF 파싱 및 추출</td>
+                <td>PyMuPDF (fitz)</td>
+                <td>Apache PDFBox / iText (Java)</td>
+                <td>Java Native 고속 좌표 매핑</td>
+            </tr>
+            <tr>
+                <td>이미지 OCR 엔진</td>
+                <td>PyTesseract (Python)</td>
+                <td>Tess4J (Tesseract JNA 래퍼)</td>
+                <td>멀티스레딩 병렬 처리 지원</td>
+            </tr>
+            <tr>
+                <td>텍스트 교정(Diff)</td>
+                <td>difflib (Python)</td>
+                <td>java-diff-utils (Java)</td>
+                <td>동일 수준의 시각적 알고리즘 유지</td>
+            </tr>
+            <tr>
+                <td>데이터 및 상태 관리</td>
+                <td>Session State (브라우저 종속 인메모리)</td>
+                <td>MariaDB/PostgreSQL + MyBatis</td>
+                <td>데이터 영구 저장 및 무결성 보장</td>
+            </tr>
+        </tbody>
+    </table>
+    ''', unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# TAB 6: Java 기반 아키텍처 (NEW)
+# TAB 6: Java 기반 아키텍처
 # -------------------------------------------------------------------------
 with tab6:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -393,7 +465,6 @@ with tab6:
     st.caption("대용량 트래픽 처리와 데이터 무결성 보장을 위해 재설계된 3-Tier 기반 아키텍처 모델입니다.")
     st.write("")
 
-    # 1. Presentation Layer (JSP + JS)
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">🌐 Presentation Layer (Client & Web)</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
@@ -407,7 +478,6 @@ with tab6:
 
     st.markdown('<div class="arrow-down">⬇️ Spring DispatcherServlet</div>', unsafe_allow_html=True)
 
-    # 2. Business Logic Layer (eGov 3.9 / Spring MVC)
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">🧠 Business Logic Layer (eGovFrame 3.9)</div>', unsafe_allow_html=True)
     c4, c5, c6 = st.columns(3)
@@ -421,7 +491,6 @@ with tab6:
 
     st.markdown('<div class="arrow-down">⬇️ MyBatis ORM</div>', unsafe_allow_html=True)
 
-    # 3. Data Access Layer
     st.markdown('<div class="arch-layer">', unsafe_allow_html=True)
     st.markdown('<div class="arch-title">💾 Data Access Layer (DBMS & Storage)</div>', unsafe_allow_html=True)
     c7, c8 = st.columns(2)
