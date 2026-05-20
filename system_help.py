@@ -77,6 +77,7 @@ st.markdown("""
     .compare-table th { background-color: #f1f5f9; color: #334155; padding: 12px; border: 1px solid #cbd5e1; font-weight: 700; text-align: center; }
     .compare-table td { padding: 12px; border: 1px solid #cbd5e1; color: #475569; font-size: 0.95rem; }
     .compare-table td:first-child { font-weight: 600; text-align: center; background-color: #f8fafc; }
+    .highlight-text { color: #0284c7; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -163,7 +164,6 @@ with tab1:
         st.markdown(f'### {step_info["icon"]} {selected_step}')
         st.markdown(f'<div class="step-box">{step_info["content"]}</div>', unsafe_allow_html=True)
         
-        # 사용자가 업로드한 캡처 이미지 렌더링 (width 파라미터 수정됨)
         img_path = step_info["image"]
         if os.path.exists(img_path):
             st.image(img_path, use_column_width=True, caption=f"{selected_step} 예시 화면")
@@ -323,7 +323,7 @@ with tab4:
         st.markdown('''
         <div class="limit-card">
             <h4>🎯 오토피팅(Auto-fitting) 오작동</h4>
-            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 텍스트 레이어 좌표를 참조하여 박호를 정밀하게 자동 조절합니다.</p>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 텍스트 레이어 좌표를 참조하여 박스를 정밀하게 자동 조절합니다.</p>
             <p style="font-size:0.9rem;"><b>한계:</b> 텍스트 레이어가 물리적 이미지와 틀어진 불량 PDF나 복잡한 배경 이미지의 경우 엉뚱한 위치로 피팅될 수 있습니다.</p>
             <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
             <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 레이어 불일치 임계값 감지 로직 추가 및 오토피팅 수동 강제 오버라이드 기능</p>
@@ -357,10 +357,10 @@ with tab5:
             "icon": "📝",
             "content": """
                 - **Python -> Java 대체 모듈 선정:**
-                  - `PyMuPDF` ➔ `Apache PDFBox` 또는 `iText` (PDF 렌더링 및 네이티브 텍스트 좌표 추출)
+                  - `PyMuPDF` ➔ 오픈소스(`Apache PDFBox`, `iText`) 또는 상용 솔루션(`Aspose.PDF for Java`) 적용 (엔터프라이즈 환경의 정밀한 렌더링 및 좌표 매핑)
                   - `PyTesseract` ➔ `Tess4J` (Tesseract JNA 래퍼 활용)
                   - `Streamlit UI` ➔ `JSP` + `HTML5 Canvas (Fabric.js)`
-                - **데이터베이스 설계:** 현재 인메모리(Session State)로 관리되는 메타데이터를 RDBMS(MariaDB 등) 및 MyBatis VO 모델로 정규화 설계합니다.
+                - **데이터베이스 설계:** 현재 인메모리(Session State)로 관리되는 메타데이터를 RDBMS(Oracle 등) 및 MyBatis VO 모델로 정규화 설계합니다.
             """
         },
         "2. 프론트엔드 UI 재구축 (Frontend)": {
@@ -374,7 +374,7 @@ with tab5:
             "icon": "⚙️",
             "content": """
                 - **eGov 3.9 (Spring MVC) 구성:** Controller - Service - DAO 계층 구조에 따라 PDF 처리 및 추출 비즈니스 로직을 구현합니다.
-                - **하이브리드 추출 구현:** 전달받은 박스 좌표(`X, Y, W, H`)를 기반으로 `PDFBox`를 이용한 텍스트 추출과 `Tess4J`를 이용한 이미지 OCR 추출을 동시 수행(Multi-threading)하는 로직을 작성합니다.
+                - **하이브리드 추출 구현:** 전달받은 박스 좌표(`X, Y, W, H`)를 기반으로 Java 라이브러리를 이용한 텍스트 추출과 `Tess4J`를 이용한 이미지 OCR 추출을 동시 수행(Multi-threading)하는 로직을 작성합니다.
             """
         },
         "4. 검증 및 시스템 연동 (Integration)": {
@@ -402,7 +402,7 @@ with tab5:
     
     st.markdown("<br><hr><br>", unsafe_allow_html=True)
     
-    # AS-IS vs TO-BE 비교표 추가
+    # AS-IS vs TO-BE 비교표
     st.markdown("#### 📊 기술 스택 전환 비교표 (AS-IS vs TO-BE)")
     st.markdown('''
     <table class="compare-table">
@@ -430,8 +430,8 @@ with tab5:
             <tr>
                 <td>PDF 파싱 및 추출</td>
                 <td>PyMuPDF (fitz)</td>
-                <td>Apache PDFBox / iText (Java)</td>
-                <td>Java Native 고속 좌표 매핑</td>
+                <td>Apache PDFBox / iText <br><span class="highlight-text">+ Aspose.PDF (고성능/유료)</span></td>
+                <td>엔터프라이즈급 정밀 렌더링 및 좌표 매핑</td>
             </tr>
             <tr>
                 <td>이미지 OCR 엔진</td>
@@ -448,7 +448,7 @@ with tab5:
             <tr>
                 <td>데이터 및 상태 관리</td>
                 <td>Session State (브라우저 종속 인메모리)</td>
-                <td>MariaDB/PostgreSQL + MyBatis</td>
+                <td><span class="highlight-text">Oracle</span> + MyBatis</td>
                 <td>데이터 영구 저장 및 무결성 보장</td>
             </tr>
         </tbody>
@@ -485,7 +485,7 @@ with tab6:
     with c4: 
         st.markdown('<div class="arch-box"><h5>🎯 Spring Controller</h5><p>- Request 매핑 및 권한 검증<br>- View(JSP) 및 API 라우팅</p></div>', unsafe_allow_html=True)
     with c5: 
-        st.markdown('<div class="arch-box"><h5>📄 Apache PDFBox</h5><p>- PDF Document 파싱<br>- 텍스트 레이어 좌표 매칭 및 오토피팅(Native 대체)</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>📄 Java PDF 엔진</h5><p>- PDFBox 또는 Aspose.PDF<br>- PDF Document 파싱 및 텍스트 추출</p></div>', unsafe_allow_html=True)
     with c6: 
         st.markdown('<div class="arch-box"><h5>👁️ Tess4J (OCR)</h5><p>- Tesseract 엔진 Java 연동<br>- 이미지 크롭 및 문자인식<br>- java-diff-utils 교정 로직</p></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -496,7 +496,7 @@ with tab6:
     st.markdown('<div class="arch-title">💾 Data Access Layer (DBMS & Storage)</div>', unsafe_allow_html=True)
     c7, c8 = st.columns(2)
     with c7: 
-        st.markdown('<div class="arch-box"><h5>🗄️ Relational DB (RDBMS)</h5><p>- MariaDB / PostgreSQL<br>- 문서 메타, Bbox 좌표, 텍스트 데이터 영구 저장</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="arch-box"><h5>🗄️ Relational DB (RDBMS)</h5><p>- Oracle<br>- 문서 메타, Bbox 좌표, 텍스트 데이터 영구 저장</p></div>', unsafe_allow_html=True)
     with c8: 
         st.markdown('<div class="arch-box"><h5>📂 File System / NAS</h5><p>- 원본 PDF 파일 저장소<br>- 추출 완료된 학습용 JSON/XML 산출물 관리</p></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
