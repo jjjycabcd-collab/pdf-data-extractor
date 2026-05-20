@@ -163,10 +163,10 @@ with tab1:
         st.markdown(f'### {step_info["icon"]} {selected_step}')
         st.markdown(f'<div class="step-box">{step_info["content"]}</div>', unsafe_allow_html=True)
         
-        # 사용자가 업로드한 캡처 이미지 렌더링
+        # 사용자가 업로드한 캡처 이미지 렌더링 (width 파라미터 수정됨)
         img_path = step_info["image"]
         if os.path.exists(img_path):
-            st.image(img_path, use_container_width=True, caption=f"{selected_step} 예시 화면")
+            st.image(img_path, use_column_width=True, caption=f"{selected_step} 예시 화면")
         else:
             st.warning(f"⚠️ 이미지를 찾을 수 없습니다: `{img_path}`\n\n깃허브 리포지토리에 파일이 업로드되어 있는지 확인해주세요.")
             
@@ -323,7 +323,7 @@ with tab4:
         st.markdown('''
         <div class="limit-card">
             <h4>🎯 오토피팅(Auto-fitting) 오작동</h4>
-            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 텍스트 레이어 좌표를 참조하여 박스를 정밀하게 자동 조절합니다.</p>
+            <p style="font-size:0.9rem; margin-top:0.5rem;"><b>현상:</b> 텍스트 레이어 좌표를 참조하여 박호를 정밀하게 자동 조절합니다.</p>
             <p style="font-size:0.9rem;"><b>한계:</b> 텍스트 레이어가 물리적 이미지와 틀어진 불량 PDF나 복잡한 배경 이미지의 경우 엉뚱한 위치로 피팅될 수 있습니다.</p>
             <hr style="margin: 0.8rem 0; border:0; border-top:1px solid #e7e5e4;">
             <p style="font-size:0.9rem;" class="accent-text">💡 개선대안: 레이어 불일치 임계값 감지 로직 추가 및 오토피팅 수동 강제 오버라이드 기능</p>
