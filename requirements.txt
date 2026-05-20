@@ -3,3 +3,4 @@ PyMuPDF
 streamlit-drawable-canvas==0.9.2
 Pillow
 pytesseract
+plotly
